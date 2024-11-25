@@ -120,14 +120,15 @@ def visualize_feature_distributions(df: pd.DataFrame) -> None:
 # Classification Functions
 
 def cross_validation_acc(data: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier],
-                      cv: int = 5, apply_smote: bool = False) -> float:
+                      cv_fold: int = 5, apply_smote: bool = False) -> float:
     """
     Performs cross-validation for a classification model with SMOTE applied to address class imbalance.
 
     Parameters:
         data (pd.DataFrame): The dataset containing features and the target.
         model (Union[DecisionTreeClassifier, RandomForestClassifier]): The classification model to evaluate.
-        cv (int): Number of cross-validation folds (default is 5).
+        cv_fold (int): Number of cross-validation folds (default is 10).
+        apply_smote (bool): Whether to apply SMOTE to the dataset (default is False).
 
     Returns:
         float: Mean cross-validation score rounded to 3 decimal places.
@@ -137,15 +138,15 @@ def cross_validation_acc(data: pd.DataFrame, model: Union[DecisionTreeClassifier
     if apply_smote:
         smote = SMOTE(random_state=42)
         X,y = smote.fit_resample(X, y)
-    return round(cross_val_score(model, X, y, cv=cv).mean()*100, 3)
+    return round(cross_val_score(model, X, y, cv=cv_fold).mean() * 100, 3)
 
 
-def holdout_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier], apply_smote: bool = False) -> float:
+def holdout_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier], test_size=0.2, apply_smote: bool = False) -> float:
     """
     Trains and evaluates a classification model on the dataset with SMOTE applied to address class imbalance.
 
     Steps:
-    1. Splits the data into training and test sets (80/20 split).
+    1. Splits the data into training and test sets.
     2. Applies SMOTE to the training set to address class imbalance.
     3. Trains the model on the resampled training set.
     4. Predicts target values for the test set.
@@ -154,13 +155,15 @@ def holdout_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassifier, Ra
     Parameters:
         data (pd.DataFrame): The dataset containing features and the target.
         model (Union[DecisionTreeClassifier, RandomForestClassifier]): The classification model to evaluate.
+        test_size (float): The proportion of the dataset to include in the test split (default is 0.2).
+        apply_smote (bool): Whether to apply SMOTE to the training set (default is False).
 
     Returns:
         float: Accuracy score rounded to 3 decimal places.
     """
     X = data.drop('Satisfaction', axis=1)
     y = data['Satisfaction']
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
     if apply_smote:
         smote = SMOTE(random_state=42)
         X_train, X_test = smote.fit_resample(X_train, y_train)
