@@ -4,11 +4,13 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score
 from imblearn.over_sampling import SMOTE
+from sklearn.impute import KNNImputer
 import matplotlib.pyplot as plt
 from typing import Union
 import seaborn as sns
 import pandas as pd
 import kagglehub
+import random
 import shap
 import os
 
@@ -46,13 +48,17 @@ def pre_process_df() -> pd.DataFrame:
             os.rename(downloaded_file, dataset_path)
         else:
             raise FileNotFoundError("The dataset was not downloaded properly. Please check the Kaggle dataset.")
-
     # Load and preprocess the dataset
-    df = pd.read_csv(dataset_path).set_index('ID')
-    df['Arrival Delay'] = df['Arrival Delay'].fillna(0)
+    df = pd.read_csv(dataset_path)
+    df.drop(columns=['ID'], inplace=True)
+    # 1. Handle missing values using KNN imputer
+    knn_imputer = KNNImputer(n_neighbors=5)
+    df['Arrival Delay'] = knn_imputer.fit_transform(df[['Arrival Delay']])
     df['Arrival Delay'] = df['Arrival Delay'].astype(int)
+    # 2. Label encode columns where order matters
     df['Satisfaction'] = df['Satisfaction'].apply(lambda x: 0 if x == 'Neutral or Dissatisfied' else 1)
     df['Class'] = df['Class'].apply(lambda x: 0 if x == 'Economy' else 1 if x == 'Economy Plus' else 2)
+    # 3. One-hot encode categorical columns where order does not matter
     df = pd.get_dummies(df, columns=['Gender'])
     df.rename(columns={'Gender_Female': 'Female',
                        'Gender_Male': 'Male'}, inplace=True)
@@ -62,6 +68,7 @@ def pre_process_df() -> pd.DataFrame:
     df = pd.get_dummies(df, columns=['Type of Travel'])
     df.rename(columns={'Type of Travel_Business': 'Business',
                        'Type of Travel_Personal': 'Personal'}, inplace=True)
+    # 4. Ensure all one-hot encoded columns are converted to integer type
     df = df.astype({col: 'int' for col in df.select_dtypes(include=['bool']).columns})
     return df
 
@@ -112,8 +119,8 @@ def visualize_feature_distributions(df: pd.DataFrame) -> None:
 
 # Classification Functions
 
-def classification_cv(data: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier],
-                      cv: int = 5) -> float:
+def cross_validation_acc(data: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier],
+                      cv: int = 5, apply_smote: bool = False) -> float:
     """
     Performs cross-validation for a classification model with SMOTE applied to address class imbalance.
 
@@ -127,12 +134,13 @@ def classification_cv(data: pd.DataFrame, model: Union[DecisionTreeClassifier, R
     """
     X = data.drop('Satisfaction', axis=1)
     y = data['Satisfaction']
-    smote = SMOTE(random_state=42)
-    X_resampled, y_resampled = smote.fit_resample(X, y)
-    return round(cross_val_score(model, X_resampled, y_resampled, cv=cv).mean()*100, 3)
+    if apply_smote:
+        smote = SMOTE(random_state=42)
+        X,y = smote.fit_resample(X, y)
+    return round(cross_val_score(model, X, y, cv=cv).mean()*100, 3)
 
 
-def classification_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier]) -> float:
+def holdout_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier], apply_smote: bool = False) -> float:
     """
     Trains and evaluates a classification model on the dataset with SMOTE applied to address class imbalance.
 
@@ -153,9 +161,10 @@ def classification_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassif
     X = data.drop('Satisfaction', axis=1)
     y = data['Satisfaction']
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    smote = SMOTE(random_state=42)
-    X_train_resampled, y_train_resampled = smote.fit_resample(X_train, y_train)
-    model.fit(X_train_resampled, y_train_resampled)
+    if apply_smote:
+        smote = SMOTE(random_state=42)
+        X_train, X_test = smote.fit_resample(X_train, y_train)
+    model.fit(X_train, X_test)
     y_pred = model.predict(X_test)
     return round(accuracy_score(y_test, y_pred)*100, 3)
 
@@ -235,7 +244,7 @@ def apply_simplification_based_xai(model: RandomForestClassifier, data: pd.DataF
     surrogate_tree.fit(X, model.predict(X))
 
     # Evaluate the surrogate model
-    accuracy = classification_accuracy(data, surrogate_tree)
+    accuracy = holdout_accuracy(data, surrogate_tree)
     print(f"Surrogate Model Accuracy: {accuracy}")
 
 
