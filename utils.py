@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from typing import Union
 import seaborn as sns
 import pandas as pd
+import numpy as np
 import kagglehub
 import random
 import shap
@@ -70,6 +71,39 @@ def pre_process_df() -> pd.DataFrame:
                        'Type of Travel_Personal': 'Personal'}, inplace=True)
     # 4. Ensure all one-hot encoded columns are converted to integer type
     df = df.astype({col: 'int' for col in df.select_dtypes(include=['bool']).columns})
+
+    # 5. Remove highly correlated features
+    correlation_matrix = df.corr()
+    upper_triangle = correlation_matrix.where(np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool))
+    excluded_columns =['Satisfaction', 'Class', 'Female', 'Male', 'First-time', 'Returning', 'Business', 'Personal']
+    # highly_correlated=[]
+    to_drop = []
+    for i in range(len(upper_triangle.columns)):
+            for j in range(i+1, len(upper_triangle.columns)):
+                feature1 = upper_triangle.columns[i]
+                feature2 = upper_triangle.columns[j]
+                corr_value = upper_triangle.iloc[i, j]
+
+                if abs(corr_value) > 0.5:
+                    # Exclude pairs if either feature is in the excluded columns
+                    if feature1 not in excluded_columns and feature2 not in excluded_columns:
+                        # Calculate correlation with target
+                        target_corr_feature1 = correlation_matrix.loc[feature1, 'Satisfaction']
+                        target_corr_feature2 = correlation_matrix.loc[feature2, 'Satisfaction']
+                        
+                        # Add to the list
+                        # highly_correlated.append((feature1, feature2, corr_value))
+                        # Determine which feature to keep based on correlation with target
+                        if target_corr_feature1 >= target_corr_feature2:
+                            # print(f"Keeping: {feature1} | Dropping: {feature2}")
+                            to_drop.append(feature2)
+                        else:
+                            # print(f"Keeping: {feature2} | Dropping: {feature1}")
+                            to_drop.append(feature1)
+    features_to_drop = ['Ease of Online Booking', 'Food and Drink', 'In-flight Service']
+
+    # Remover as features do DataFrame
+    df.drop(columns=features_to_drop, inplace=True)
     return df
 
 
@@ -166,8 +200,8 @@ def holdout_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassifier, Ra
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
     if apply_smote:
         smote = SMOTE(random_state=42)
-        X_train, X_test = smote.fit_resample(X_train, y_train)
-    model.fit(X_train, X_test)
+        X_train, y_train = smote.fit_resample(X_train, y_train)
+    model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
     return round(accuracy_score(y_test, y_pred)*100, 3)
 
