@@ -10,13 +10,11 @@ from typing import Union
 import seaborn as sns
 import pandas as pd
 import numpy as np
-import kagglehub
 import random
 import shap
-import os
 
 
-def pre_process_df() -> pd.DataFrame:
+def pre_process_df(df: pd.DataFrame, drop_correlated: bool) -> pd.DataFrame:
     """
     Preprocesses the airline passenger satisfaction dataset.
 
@@ -37,25 +35,18 @@ def pre_process_df() -> pd.DataFrame:
     Returns:
         pd.DataFrame: The preprocessed DataFrame.
     """
-    # Ensure the 'data' folder and CSV exist
-    dataset_path = "data/airline_passenger_satisfaction.csv"
-    if not os.path.exists("data"):
-        os.makedirs("data")
-    if not os.path.exists(dataset_path):
-        print("Downloading dataset...")
-        path = kagglehub.dataset_download("nilanjansamanta1210/airline-passenger-satisfaction")
-        downloaded_file = os.path.join(path, "airline_passenger_satisfaction.csv")
-        if os.path.exists(downloaded_file):
-            os.rename(downloaded_file, dataset_path)
-        else:
-            raise FileNotFoundError("The dataset was not downloaded properly. Please check the Kaggle dataset.")
-    # Load and preprocess the dataset
-    df = pd.read_csv(dataset_path)
     df.drop(columns=['ID'], inplace=True)
     # 1. Handle missing values using KNN imputer
     knn_imputer = KNNImputer(n_neighbors=5)
     df['Arrival Delay'] = knn_imputer.fit_transform(df[['Arrival Delay']])
     df['Arrival Delay'] = df['Arrival Delay'].astype(int)
+
+    # Create Total Delay feature by summing Arrival Delay and Departure Delay
+    df['Total Delay'] = df['Arrival Delay'] + df['Departure Delay']
+
+    # Drop the original delay columns to avoid redundancy
+    df.drop(columns=['Arrival Delay', 'Departure Delay'], inplace=True)
+
     # 2. Label encode columns where order matters
     df['Satisfaction'] = df['Satisfaction'].apply(lambda x: 0 if x == 'Neutral or Dissatisfied' else 1)
     df['Class'] = df['Class'].apply(lambda x: 0 if x == 'Economy' else 1 if x == 'Economy Plus' else 2)
@@ -71,39 +62,39 @@ def pre_process_df() -> pd.DataFrame:
                        'Type of Travel_Personal': 'Personal'}, inplace=True)
     # 4. Ensure all one-hot encoded columns are converted to integer type
     df = df.astype({col: 'int' for col in df.select_dtypes(include=['bool']).columns})
-
     # 5. Remove highly correlated features
-    correlation_matrix = df.corr()
-    upper_triangle = correlation_matrix.where(np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool))
-    excluded_columns =['Satisfaction', 'Class', 'Female', 'Male', 'First-time', 'Returning', 'Business', 'Personal']
-    # highly_correlated=[]
-    to_drop = []
-    for i in range(len(upper_triangle.columns)):
-            for j in range(i+1, len(upper_triangle.columns)):
-                feature1 = upper_triangle.columns[i]
-                feature2 = upper_triangle.columns[j]
-                corr_value = upper_triangle.iloc[i, j]
+    if drop_correlated:
+        correlation_matrix = df.corr()
+        upper_triangle = correlation_matrix.where(np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool))
+        excluded_columns =['Satisfaction', 'Class', 'Female', 'Male', 'First-time', 'Returning', 'Business', 'Personal']
+        # highly_correlated=[]
+        to_drop = []
+        for i in range(len(upper_triangle.columns)):
+                for j in range(i+1, len(upper_triangle.columns)):
+                    feature1 = upper_triangle.columns[i]
+                    feature2 = upper_triangle.columns[j]
+                    corr_value = upper_triangle.iloc[i, j]
 
-                if abs(corr_value) > 0.5:
-                    # Exclude pairs if either feature is in the excluded columns
-                    if feature1 not in excluded_columns and feature2 not in excluded_columns:
-                        # Calculate correlation with target
-                        target_corr_feature1 = correlation_matrix.loc[feature1, 'Satisfaction']
-                        target_corr_feature2 = correlation_matrix.loc[feature2, 'Satisfaction']
-                        
-                        # Add to the list
-                        # highly_correlated.append((feature1, feature2, corr_value))
-                        # Determine which feature to keep based on correlation with target
-                        if target_corr_feature1 >= target_corr_feature2:
-                            # print(f"Keeping: {feature1} | Dropping: {feature2}")
-                            to_drop.append(feature2)
-                        else:
-                            # print(f"Keeping: {feature2} | Dropping: {feature1}")
-                            to_drop.append(feature1)
-    features_to_drop = ['Ease of Online Booking', 'Food and Drink', 'In-flight Service']
+                    if abs(corr_value) > 0.5:
+                        # Exclude pairs if either feature is in the excluded columns
+                        if feature1 not in excluded_columns and feature2 not in excluded_columns:
+                            # Calculate correlation with target
+                            target_corr_feature1 = correlation_matrix.loc[feature1, 'Satisfaction']
+                            target_corr_feature2 = correlation_matrix.loc[feature2, 'Satisfaction']
+                            
+                            # Add to the list
+                            # highly_correlated.append((feature1, feature2, corr_value))
+                            # Determine which feature to keep based on correlation with target
+                            if target_corr_feature1 >= target_corr_feature2:
+                                # print(f"Keeping: {feature1} | Dropping: {feature2}")
+                                to_drop.append(feature2)
+                            else:
+                                # print(f"Keeping: {feature2} | Dropping: {feature1}")
+                                to_drop.append(feature1)
+        features_to_drop = ['Ease of Online Booking', 'Food and Drink', 'In-flight Service']
 
-    # Remover as features do DataFrame
-    df.drop(columns=features_to_drop, inplace=True)
+        # Remover as features do DataFrame
+        df.drop(columns=features_to_drop, inplace=True)
     return df
 
 
@@ -278,7 +269,7 @@ def apply_simplification_based_xai(model: RandomForestClassifier, data: pd.DataF
 
     # Train a decision tree to approximate the random forest
     surrogate_tree = DecisionTreeClassifier(max_depth=3, random_state=42)
-    surrogate_tree.fit(X, model.predict(X))
+    surrogate_tree.fit(X, model.fit(X,y).predict(X))
 
     # Evaluate the surrogate model
     accuracy = holdout_accuracy(data, surrogate_tree)
