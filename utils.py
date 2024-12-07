@@ -6,6 +6,7 @@ from sklearn.metrics import accuracy_score
 from imblearn.over_sampling import SMOTE
 from sklearn.impute import KNNImputer
 import matplotlib.pyplot as plt
+from sklearn.tree import _tree
 from typing import Union
 import seaborn as sns
 import pandas as pd
@@ -248,7 +249,7 @@ def analyze_tree_complexity(feature_names: list, tree: DecisionTreeClassifier) -
 
 # Task 3
 ## Task 3.1: Simplification-based Technique
-def apply_simplification_based_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
+def apply_surrogate_models_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
     Applies a simplification-based XAI technique (using a decision tree to approximate a random forest).
 
@@ -268,7 +269,56 @@ def apply_simplification_based_xai(X: pd.DataFrame,y: pd.DataFrame, model: Rando
     accuracy = holdout_accuracy(X, y, surrogate_tree)
     print(f"Surrogate Model Accuracy: {accuracy}%")
 
+def apply_rule_extraction_xai(model: RandomForestClassifier, data: pd.DataFrame) -> None:
+    """
+    Applies a rule extraction-based XAI technique (using the decision trees in a random forest to extract rules).
+    
+    Parameters:
+        model (RandomForestClassifier): The trained black-box model (Random Forest).
+        data (pd.DataFrame): The dataset containing features and the target.
 
+    Returns:
+        None: Prints the extracted rules.
+    """
+    # Função para extrair regras de uma árvore de decisão
+    def extract_rules_from_tree(tree, feature_names):
+        tree_ = tree.tree_
+        feature_name = [
+            feature_names[i] if i != _tree.TREE_UNDEFINED else "undefined!"
+            for i in tree_.feature
+        ]
+        
+        def recurse(node):
+            if tree_.feature[node] != _tree.TREE_UNDEFINED:
+                name = feature_name[node]
+                threshold = tree_.threshold[node]
+                left = tree_.children_left[node]
+                right = tree_.children_right[node]
+                if tree_.value[left].argmax() > tree_.value[right].argmax():
+                    rule = f"If {name} <= {threshold:.2f}, go to the left branch."
+                else:
+                    rule = f"If {name} > {threshold:.2f}, go to the right branch."
+                return [rule] + recurse(left) + recurse(right)
+            else:
+                return []
+        
+        return recurse(0)  # Inicia a recursão na raiz da árvore
+    
+    # Obter as árvores do modelo Random Forest
+    trees = model.estimators_
+
+    # Extrair e imprimir regras para cada árvore
+    for idx, tree in enumerate(trees):
+        print(f"Rules extracted from Tree {idx + 1}:")
+        rules = extract_rules_from_tree(tree, data.drop('Satisfaction', axis=1).columns)
+        for rule in rules:
+            print(rule)
+        print("\n")
+
+    # Opcional: Você pode usar a acurácia do modelo com as regras para validar
+    # a interpretação do modelo (por exemplo, comparando com o desempenho do modelo real).
+    # Mas para extração de regras, o foco é a interpretação das árvores.
+    
 ## Task 3.2: Feature-based Techniques
 def apply_feature_based_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
