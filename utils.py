@@ -66,31 +66,32 @@ def pre_process_df(df: pd.DataFrame, drop_correlated: bool) -> pd.DataFrame:
     if drop_correlated:
         correlation_matrix = df.corr()
         upper_triangle = correlation_matrix.where(np.triu(np.ones(correlation_matrix.shape), k=1).astype(bool))
-        excluded_columns =['Satisfaction', 'Class', 'Female', 'Male', 'First-time', 'Returning', 'Business', 'Personal']
+        excluded_columns = ['Satisfaction', 'Class', 'Female', 'Male', 'First-time', 'Returning', 'Business',
+                            'Personal']
         # highly_correlated=[]
         to_drop = []
         for i in range(len(upper_triangle.columns)):
-                for j in range(i+1, len(upper_triangle.columns)):
-                    feature1 = upper_triangle.columns[i]
-                    feature2 = upper_triangle.columns[j]
-                    corr_value = upper_triangle.iloc[i, j]
+            for j in range(i + 1, len(upper_triangle.columns)):
+                feature1 = upper_triangle.columns[i]
+                feature2 = upper_triangle.columns[j]
+                corr_value = upper_triangle.iloc[i, j]
 
-                    if abs(corr_value) > 0.5:
-                        # Exclude pairs if either feature is in the excluded columns
-                        if feature1 not in excluded_columns and feature2 not in excluded_columns:
-                            # Calculate correlation with target
-                            target_corr_feature1 = correlation_matrix.loc[feature1, 'Satisfaction']
-                            target_corr_feature2 = correlation_matrix.loc[feature2, 'Satisfaction']
-                            
-                            # Add to the list
-                            # highly_correlated.append((feature1, feature2, corr_value))
-                            # Determine which feature to keep based on correlation with target
-                            if target_corr_feature1 >= target_corr_feature2:
-                                # print(f"Keeping: {feature1} | Dropping: {feature2}")
-                                to_drop.append(feature2)
-                            else:
-                                # print(f"Keeping: {feature2} | Dropping: {feature1}")
-                                to_drop.append(feature1)
+                if abs(corr_value) > 0.5:
+                    # Exclude pairs if either feature is in the excluded columns
+                    if feature1 not in excluded_columns and feature2 not in excluded_columns:
+                        # Calculate correlation with target
+                        target_corr_feature1 = correlation_matrix.loc[feature1, 'Satisfaction']
+                        target_corr_feature2 = correlation_matrix.loc[feature2, 'Satisfaction']
+
+                        # Add to the list
+                        # highly_correlated.append((feature1, feature2, corr_value))
+                        # Determine which feature to keep based on correlation with target
+                        if target_corr_feature1 >= target_corr_feature2:
+                            # print(f"Keeping: {feature1} | Dropping: {feature2}")
+                            to_drop.append(feature2)
+                        else:
+                            # print(f"Keeping: {feature2} | Dropping: {feature1}")
+                            to_drop.append(feature1)
         features_to_drop = ['Ease of Online Booking', 'Food and Drink', 'In-flight Service']
 
         # Remover as features do DataFrame
@@ -144,13 +145,14 @@ def visualize_feature_distributions(df: pd.DataFrame) -> None:
 
 # Classification Functions
 
-def cross_validation_acc(data: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier],
-                      cv_fold: int = 5, apply_smote: bool = False) -> float:
+def cross_validation_acc(X: pd.DataFrame, y: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier],
+                         cv_fold: int = 5, apply_smote: bool = False) -> float:
     """
     Performs cross-validation for a classification model with SMOTE applied to address class imbalance.
 
     Parameters:
-        data (pd.DataFrame): The dataset containing features and the target.
+        X (pd.DataFrame): The dataset containing features.
+        y (pd.DataFrame): The target variable.
         model (Union[DecisionTreeClassifier, RandomForestClassifier]): The classification model to evaluate.
         cv_fold (int): Number of cross-validation folds (default is 10).
         apply_smote (bool): Whether to apply SMOTE to the dataset (default is False).
@@ -158,15 +160,14 @@ def cross_validation_acc(data: pd.DataFrame, model: Union[DecisionTreeClassifier
     Returns:
         float: Mean cross-validation score rounded to 3 decimal places.
     """
-    X = data.drop('Satisfaction', axis=1)
-    y = data['Satisfaction']
     if apply_smote:
         smote = SMOTE(random_state=42)
-        X,y = smote.fit_resample(X, y)
+        X, y = smote.fit_resample(X, y)
     return round(cross_val_score(model, X, y, cv=cv_fold).mean() * 100, 3)
 
 
-def holdout_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier], test_size=0.2, apply_smote: bool = False) -> float:
+def holdout_accuracy(X: pd.DataFrame, y: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier],
+                     test_size=0.2, apply_smote: bool = False) -> float:
     """
     Trains and evaluates a classification model on the dataset with SMOTE applied to address class imbalance.
 
@@ -178,7 +179,8 @@ def holdout_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassifier, Ra
     5. Calculates and returns the accuracy score.
 
     Parameters:
-        data (pd.DataFrame): The dataset containing features and the target.
+        X (pd.DataFrame): The dataset containing features.
+        y (pd.DataFrame): The target variable.
         model (Union[DecisionTreeClassifier, RandomForestClassifier]): The classification model to evaluate.
         test_size (float): The proportion of the dataset to include in the test split (default is 0.2).
         apply_smote (bool): Whether to apply SMOTE to the training set (default is False).
@@ -186,31 +188,24 @@ def holdout_accuracy(data: pd.DataFrame, model: Union[DecisionTreeClassifier, Ra
     Returns:
         float: Accuracy score rounded to 3 decimal places.
     """
-    X = data.drop('Satisfaction', axis=1)
-    y = data['Satisfaction']
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
     if apply_smote:
         smote = SMOTE(random_state=42)
         X_train, y_train = smote.fit_resample(X_train, y_train)
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
-    return round(accuracy_score(y_test, y_pred)*100, 3)
+    return round(accuracy_score(y_test, y_pred) * 100, 3)
 
 
 # Task 2:
-def analyze_tree_complexity(tree: DecisionTreeClassifier, df: pd.DataFrame,
-                            target_column: str = 'Satisfaction') -> None:
+def analyze_tree_complexity(feature_names: list, tree: DecisionTreeClassifier) -> None:
     """
     Produces graphs showing detailed information about the complexity and structure of the decision tree.
 
     Parameters:
+        feature_names (list): List of feature names.
         tree (DecisionTreeClassifier): Trained decision tree model
-        df (pd.DataFrame): DataFrame containing the features and target
-        target_column (str): The name of the target column
     """
-    # Infer feature names
-    feature_names = df.drop(columns=[target_column]).columns.tolist()
-
     # Basic tree properties
     depth = tree.get_depth()
     n_leaves = tree.get_n_leaves()
@@ -253,44 +248,40 @@ def analyze_tree_complexity(tree: DecisionTreeClassifier, df: pd.DataFrame,
 
 # Task 3
 ## Task 3.1: Simplification-based Technique
-def apply_simplification_based_xai(model: RandomForestClassifier, data: pd.DataFrame) -> None:
+def apply_simplification_based_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
     Applies a simplification-based XAI technique (using a decision tree to approximate a random forest).
 
     Parameters:
+        X (pd.DataFrame): The dataset containing features.
+        y (pd.DataFrame): The target variable.
         model (RandomForestClassifier): The trained black-box model.
-        data (pd.DataFrame): The dataset containing features and the target.
 
     Returns:
         None: Prints accuracy and displays the visualized decision tree.
     """
-    X = data.drop('Satisfaction', axis=1)
-    y = data['Satisfaction']
-
     # Train a decision tree to approximate the random forest
     surrogate_tree = DecisionTreeClassifier(max_depth=3, random_state=42)
-    surrogate_tree.fit(X, model.fit(X,y).predict(X))
+    surrogate_tree.fit(X, model.fit(X, y).predict(X))
 
     # Evaluate the surrogate model
-    accuracy = holdout_accuracy(data, surrogate_tree)
-    print(f"Surrogate Model Accuracy: {accuracy}")
+    accuracy = holdout_accuracy(X, y, surrogate_tree)
+    print(f"Surrogate Model Accuracy: {accuracy}%")
 
 
 ## Task 3.2: Feature-based Techniques
-def apply_feature_based_xai(model: RandomForestClassifier, data: pd.DataFrame) -> None:
+def apply_feature_based_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
     Applies two feature-based XAI techniques (Permutation Importance and SHAP Values) to the random forest model.
 
     Parameters:
+        X (pd.DataFrame): The dataset containing features.
+        y (pd.DataFrame): The target variable.
         model (RandomForestClassifier): The trained black-box model.
-        data (pd.DataFrame): The dataset containing features and the target.
 
     Returns:
         None: Prints and compares feature importance metrics.
     """
-    X = data.drop('Satisfaction', axis=1)
-    y = data['Satisfaction']
-
     # Permutation Importance
     print("Permutation Importance:")
     perm_importance = permutation_importance(model, X, y, n_repeats=10, random_state=42)
@@ -310,24 +301,20 @@ def apply_feature_based_xai(model: RandomForestClassifier, data: pd.DataFrame) -
 
 
 ## Task 3.3: Example-based Techniques
-def apply_example_based_xai(model: RandomForestClassifier, data: pd.DataFrame, target_column: str,
+def apply_example_based_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier,
                             num_examples: int = 3) -> None:
     """
     Applies an example-based XAI technique (SHAP force plot) for individual predictions.
 
     Parameters:
+        X (pd.DataFrame): The dataset containing features.
+        y (pd.DataFrame): The target variable.
         model (RandomForestClassifier): The trained black-box model.
-        data (pd.DataFrame): The dataset containing features and the target.
-        target_column (str): Name of the target column in the dataset.
         num_examples (int): Number of random examples to explain. Default is 3.
 
     Returns:
         None: Displays SHAP force plots for the given examples.
     """
-    # Split features and target
-    X = data.drop(columns=[target_column])
-    y = data[target_column]
-
     # Initialize SHAP TreeExplainer
     explainer = shap.TreeExplainer(model)
     shap_values = explainer.shap_values(X)
