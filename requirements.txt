@@ -5,3 +5,4 @@ seaborn==0.13.2
 imblearn==0.0
 shap==0.44.1
 kagglehub==0.2.9
+lime==0.2.0.1

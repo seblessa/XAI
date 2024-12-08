@@ -7,11 +7,13 @@ from imblearn.over_sampling import SMOTE
 from sklearn.impute import KNNImputer
 import matplotlib.pyplot as plt
 from sklearn.tree import _tree
+import lime.lime_tabular
 from typing import Union
 import seaborn as sns
 import pandas as pd
 import numpy as np
 import random
+import lime
 import shap
 
 
@@ -513,7 +515,7 @@ def evaluate_rule_extraction_accuracy(rules_df: pd.DataFrame, data: pd.DataFrame
 
     
 ## Task 3.2: Feature-based Techniques
-def apply_feature_based_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
+def apply_permutation_importance_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
     Applies two feature-based XAI techniques (Permutation Importance and SHAP Values) to the random forest model.
 
@@ -529,9 +531,60 @@ def apply_feature_based_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForest
     print("Permutation Importance:")
     perm_importance = permutation_importance(model, X, y, n_repeats=10, random_state=42)
     perm_importances_df = pd.Series(perm_importance.importances_mean, index=X.columns)
-    perm_importances_df = perm_importances_df.sort_values(ascending=False)
+    perm_importances_df = perm_importances_df.sort_values(ascending=False) # Feattures mais importantes primeiro
     print(perm_importances_df)
 
+    # Plotting Permutation Importance
+    plt.figure(figsize=(10, 6))
+    perm_importances_df.plot(kind='bar', color='skyblue', edgecolor='black')
+    plt.title("Permutation Importance (Feature Importance)")
+    plt.xlabel("Features")
+    plt.ylabel("Importance Score")
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    plt.show()
+
+def apply_lime_xai(X: pd.DataFrame, model, sample_index: int):
+    """
+    Applies LIME to explain a single prediction of the model.
+    
+    Parameters:
+        X (pd.DataFrame): Feature dataset.
+        model (RandomForestClassifier): The trained machine learning model.
+        sample_index (int): Index of the sample to explain.
+        
+    Returns:
+        None: Prints the explanation and plots the feature contributions.
+    """
+    # Criar o interpretador LIME para dados tabulares
+    explainer = lime.lime_tabular.LimeTabularExplainer(
+        training_data=X.values,
+        feature_names=X.columns,
+        class_names=['0', '1'], 
+        mode='classification'
+    )
+
+    # Selecionar uma amostra do dataset
+    sample = X.iloc[sample_index].values 
+
+    # Gerar explicação
+    explanation = explainer.explain_instance(
+        data_row=sample, 
+        predict_fn=model.predict_proba  # Função de predição para probabilidade
+    )
+
+    # Exibir explicação
+    print("Explanation for sample index:", sample_index)
+    explanation.show_in_notebook(show_all=False)
+
+    # Visualizar contribuições das features
+    explanation.as_pyplot_figure()
+    plt.title(f"Feature Contributions for Sample {sample_index}")
+    plt.show()
+
+
+def apply_shap_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier) -> None:
+    
     # SHAP Values
     print("\nSHAP Values:")
     explainer = shap.TreeExplainer(model)
