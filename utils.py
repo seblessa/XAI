@@ -269,55 +269,248 @@ def apply_surrogate_models_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomFor
     accuracy = holdout_accuracy(X, y, surrogate_tree)
     print(f"Surrogate Model Accuracy: {accuracy}%")
 
-def apply_rule_extraction_xai(model: RandomForestClassifier, data: pd.DataFrame) -> None:
+
+def apply_rule_extraction_xai(model, data: pd.DataFrame, target_column: str = 'Satisfaction', min_coverage: int = 10) -> pd.DataFrame:
     """
-    Applies a rule extraction-based XAI technique (using the decision trees in a random forest to extract rules).
-    
+    Extracts, prunes, and summarizes rules from a Random Forest model.
+
     Parameters:
-        model (RandomForestClassifier): The trained black-box model (Random Forest).
-        data (pd.DataFrame): The dataset containing features and the target.
+        model (RandomForestClassifier): The trained Random Forest model.
+        data (pd.DataFrame): The dataset containing features and the target column.
+        target_column (str): The name of the target column.
+        min_coverage (int): The minimum coverage threshold to keep a rule.
+        save_to_file (str, optional): Path to save the pruned rules as a CSV file. If None, no file is saved.
 
     Returns:
-        None: Prints the extracted rules.
+        pd.DataFrame: A DataFrame containing the pruned rules and their metadata.
     """
-    # Função para extrair regras de uma árvore de decisão
+    feature_names = data.drop(columns=[target_column]).columns
+    rules_list = []
+
+    # Step 1: Rule Extraction
     def extract_rules_from_tree(tree, feature_names):
         tree_ = tree.tree_
         feature_name = [
             feature_names[i] if i != _tree.TREE_UNDEFINED else "undefined!"
             for i in tree_.feature
         ]
-        
-        def recurse(node):
+
+        def recurse(node, conditions):
             if tree_.feature[node] != _tree.TREE_UNDEFINED:
                 name = feature_name[node]
                 threshold = tree_.threshold[node]
                 left = tree_.children_left[node]
                 right = tree_.children_right[node]
-                if tree_.value[left].argmax() > tree_.value[right].argmax():
-                    rule = f"If {name} <= {threshold:.2f}, go to the left branch."
-                else:
-                    rule = f"If {name} > {threshold:.2f}, go to the right branch."
-                return [rule] + recurse(left) + recurse(right)
+                
+                # Add condition for the left branch
+                recurse(left, conditions + [f"{name} <= {threshold:.2f}"])
+                # Add condition for the right branch
+                recurse(right, conditions + [f"{name} > {threshold:.2f}"])
             else:
-                return []
+                # Leaf node: collect rule and its class
+                value = tree_.value[node]
+                predicted_class = value.argmax()
+                coverage = int(value.sum())
+                rules_list.append({
+                    "rule": " AND ".join(conditions),
+                    "predicted_class": predicted_class,
+                    "coverage": coverage
+                })
+
+        recurse(0, [])  # Start recursion from root
+
+    # Extract rules from all trees in the forest
+    for idx, tree in enumerate(model.estimators_):
+        extract_rules_from_tree(tree, feature_names)
+
+    # Convert rules to a DataFrame
+    rules_df = pd.DataFrame(rules_list)
+
+    # Step 2: Prune Rules
+    def prune_rules(rules_df: pd.DataFrame, min_coverage: int) -> pd.DataFrame:
+        """
+        Prunes the extracted rules by filtering out those with low coverage.
+
+        Parameters:
+            rules_df (pd.DataFrame): The DataFrame containing extracted rules.
+            min_coverage (int): The minimum coverage threshold to keep a rule.
+
+        Returns:
+            pd.DataFrame: The pruned DataFrame of rules.
+        """
+        # Filter rules with coverage above the threshold
+        pruned_rules = rules_df[rules_df['coverage'] >= min_coverage].copy()
+        return pruned_rules.reset_index(drop=True)
+
+    pruned_rules_df = prune_rules(rules_df, min_coverage)
+
+    # Step 3: Summarize Rules
+    def extract_feature_name(condition: str) -> str:
+        """
+        Extracts all the words to the left of the comparison operator ('>', '<=', etc.) from a condition.
+
+        Parameters:
+            condition (str): A single condition string, e.g., "In-flight service today > 45".
+
+        Returns:
+            str: The feature name, e.g., "In-flight service today".
+        """
+        # Define the operators in order of priority
+        operators = ['>=', '<=', '>', '<']
         
-        return recurse(0)  # Inicia a recursão na raiz da árvore
+        # Find and split using the first operator encountered
+        for op in operators:
+            if op in condition:
+                return condition.split(op)[0].strip()
+        
+        # Return the condition itself if no operator is found
+        return condition.strip()
+
+    def summarize_rules(rules_df: pd.DataFrame) -> None:
+        """
+        Summarizes the extracted rules.
+
+        Parameters:
+            rules_df (pd.DataFrame): The DataFrame containing extracted rules.
+
+        Returns:
+            None: Prints a summary of rules and their characteristics.
+        """
+        # Count rules by predicted class
+        class_summary = rules_df.groupby('predicted_class').size()
+        print("Number of rules per class:")
+        print(class_summary)
+
+        # Analyze feature frequency in rules
+        feature_frequency = {}
+        for rule in rules_df['rule']:
+            # Split the rule into individual conditions
+            conditions = rule.split(" AND ")
+            # Extract the full feature name from each condition
+            for condition in conditions:
+                feature_name = extract_feature_name(condition)
+                feature_frequency[feature_name] = feature_frequency.get(feature_name, 0) + 1
+
+        # Create a sorted DataFrame for feature frequency
+        feature_summary = pd.DataFrame.from_dict(feature_frequency, orient='index', columns=['frequency'])
+        feature_summary = feature_summary.sort_values(by='frequency', ascending=False)
+        print("\nFeature frequency in rules:")
+        print(feature_summary)
+        return feature_summary
+
+    feature_summary = summarize_rules(pruned_rules_df)
+
+    return feature_summary,pruned_rules_df
+
+def plot_feature_importance_from_rules(feature_summary: pd.DataFrame):
+    """
+    Plots a bar chart of feature importance based on the frequency of feature occurrences in the extracted rules.
     
-    # Obter as árvores do modelo Random Forest
-    trees = model.estimators_
+    Parameters:
+        feature_summary (pd.DataFrame): The DataFrame containing the feature frequencies from rule extraction.
 
-    # Extrair e imprimir regras para cada árvore
-    for idx, tree in enumerate(trees):
-        print(f"Rules extracted from Tree {idx + 1}:")
-        rules = extract_rules_from_tree(tree, data.drop('Satisfaction', axis=1).columns)
-        for rule in rules:
-            print(rule)
-        print("\n")
+    Returns:
+        None: Displays a bar chart of feature importance.
+    """
+    # Normalize the importance (to sum up to 100%)
+    feature_summary['Importance (%)'] = (feature_summary['frequency'] / feature_summary['frequency'].sum()) * 100
+    
+    # Sort the features by importance
+    feature_summary = feature_summary.sort_values(by='Importance (%)', ascending=False)
+    
+    # Plot the graph
+    plt.figure(figsize=(10, 6))
+    plt.barh(feature_summary.index, feature_summary['Importance (%)'], color='skyblue')
+    plt.xlabel('Importance (%)')
+    plt.title('Feature Importance Based on Rule Extraction')
+    plt.gca().invert_yaxis()  # Invert the y-axis to show the most important features on top
+    plt.show()
 
-    # Opcional: Você pode usar a acurácia do modelo com as regras para validar
-    # a interpretação do modelo (por exemplo, comparando com o desempenho do modelo real).
-    # Mas para extração de regras, o foco é a interpretação das árvores.
+def parse_condition(condition: str):
+        """
+        Parse a condition like "Feature1 <= 45" into feature, operator, and value.
+
+        Parameters:
+            condition (str): A condition string like 'Feature1 <= 45'.
+
+        Returns:
+            feature (str): The name of the feature (e.g., 'Feature1').
+            operator (str): The comparison operator (e.g., '<=' or '>').
+            value (float): The value to compare (e.g., 45).
+        """
+        operators = ['<=', '<', '>=', '>', '=']
+        
+        # Try to find the operator in the condition
+        for operator in operators:
+            if operator in condition:
+                feature, value = condition.split(operator)
+                return feature.strip(), operator, float(value.strip())
+        
+        # If no operator is found, raise an error
+        raise ValueError(f"Invalid condition format: {condition}")
+
+def evaluate_rule_extraction_accuracy(rules_df: pd.DataFrame, data: pd.DataFrame, target_column: str = 'Satisfaction') -> float:
+    """
+    Evaluates the accuracy of the rule extraction technique by comparing predictions based on extracted rules with the true labels.
+    
+    Parameters:
+        rules_df (pd.DataFrame): The DataFrame containing the pruned rules.
+        data (pd.DataFrame): The dataset containing the features.
+        target_column (str): The name of the target column.
+        
+    Returns:
+        float: Accuracy of the rule-based predictions.
+    """
+    # Initialize an empty list to store predictions
+    predictions = []
+    true_labels = data[target_column]
+
+    # Loop through each row of the dataset
+    for _, row in data.iterrows():
+        predicted_class = None
+        # Iterate through the pruned rules and apply them
+        for _, rule in rules_df.iterrows():
+            rule_conditions = rule['rule'].split(" AND ")
+            rule_predicted_class = rule['predicted_class']
+            
+            # Assume the rule applies until proven otherwise
+            rule_applies = True
+
+            # Evaluate each condition in the rule for the current row
+            for condition in rule_conditions:
+                feature, operator, value = parse_condition(condition)
+                feature_value = row[feature]
+
+                # Compare the feature value with the rule's condition
+                if operator == '<=' and feature_value > value:
+                    rule_applies = False
+                    break
+                elif operator == '<' and feature_value >= value:
+                    rule_applies = False
+                    break
+                elif operator == '>=' and feature_value < value:
+                    rule_applies = False
+                    break
+                elif operator == '>' and feature_value <= value:
+                    rule_applies = False
+                    break
+                elif operator == '=' and feature_value != value:
+                    rule_applies = False
+                    break
+            
+            # If the rule applies, assign the predicted class and stop checking further rules
+            if rule_applies:
+                predicted_class = rule_predicted_class
+                break
+        
+        # If no rule matched, use a default class (e.g., -1 for no match)
+        predictions.append(predicted_class if predicted_class is not None else -1)
+    
+    # Compute and return the accuracy score
+    accuracy = accuracy_score(true_labels, predictions)
+    return accuracy
+    
+
     
 ## Task 3.2: Feature-based Techniques
 def apply_feature_based_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
