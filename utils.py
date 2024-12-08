@@ -1,19 +1,20 @@
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.inspection import permutation_importance
 from sklearn.ensemble import RandomForestClassifier
+from lime.lime_tabular import LimeTabularExplainer
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score
+from alibi.explainers import AnchorTabular
 from imblearn.over_sampling import SMOTE
 from sklearn.impute import KNNImputer
+from IPython.display import display
 import matplotlib.pyplot as plt
 from sklearn.tree import _tree
-import lime.lime_tabular
+from pandas import DataFrame
 from typing import Union
 import seaborn as sns
 import pandas as pd
 import numpy as np
-import random
-import lime
 import shap
 
 
@@ -26,7 +27,7 @@ def pre_process_df(df: pd.DataFrame, drop_correlated: bool) -> pd.DataFrame:
     2. Loads the dataset and sets the 'ID' column as the index.
     3. Handles missing values:
        - Fills missing values in the 'Arrival Delay' column with 0.
-    4. Converts 'Arrival Delay' to integer, as it doesn't require decimals.
+    4. Converts 'Arrival Delay' to integer, and creates a new feature 'Total Delay' by summing 'Arrival Delay' and 'Departure Delay'.
     5. Label encodes columns where the order matters:
        - 'Satisfaction': 0 for 'Neutral or Dissatisfied', 1 for 'Satisfied'.
        - 'Class': 0 for 'Economy', 1 for 'Economy Plus', 2 for 'Business'.
@@ -34,6 +35,7 @@ def pre_process_df(df: pd.DataFrame, drop_correlated: bool) -> pd.DataFrame:
        - 'Gender', 'Customer Type', and 'Type of Travel'.
        - Renames one-hot encoded columns for better readability.
     7. Ensures all one-hot encoded columns are converted to integer type.
+    8. Drops highly correlated features if 'drop_correlated' is True.
 
     Returns:
         pd.DataFrame: The preprocessed DataFrame.
@@ -148,25 +150,24 @@ def visualize_feature_distributions(df: pd.DataFrame) -> None:
 
 # Classification Functions
 
-def cross_validation_acc(X: pd.DataFrame, y: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier],
-                         cv_fold: int = 5, apply_smote: bool = False) -> float:
+def split_data(X: pd.DataFrame, y: pd.DataFrame, test_size: float = 0.2, apply_smote: bool = False) -> tuple:
     """
-    Performs cross-validation for a classification model with SMOTE applied to address class imbalance.
+    Splits the dataset into features and target variables, and further splits them into training and test sets.
 
     Parameters:
         X (pd.DataFrame): The dataset containing features.
         y (pd.DataFrame): The target variable.
-        model (Union[DecisionTreeClassifier, RandomForestClassifier]): The classification model to evaluate.
-        cv_fold (int): Number of cross-validation folds (default is 10).
-        apply_smote (bool): Whether to apply SMOTE to the dataset (default is False).
+        test_size (float): The proportion of the dataset to include in the test split (default is 0.2).
+        apply_smote (bool): Whether to apply SMOTE to the training set (default is False).
 
     Returns:
-        float: Mean cross-validation score rounded to 3 decimal places.
+        tuple: X_train, X_test, y_train, y_test
     """
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
     if apply_smote:
         smote = SMOTE(random_state=42)
-        X, y = smote.fit_resample(X, y)
-    return round(cross_val_score(model, X, y, cv=cv_fold).mean() * 100, 3)
+        X_train, y_train = smote.fit_resample(X_train, y_train)
+    return X_train, X_test, y_train, y_test
 
 
 def holdout_accuracy(X: pd.DataFrame, y: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier],
@@ -191,24 +192,48 @@ def holdout_accuracy(X: pd.DataFrame, y: pd.DataFrame, model: Union[DecisionTree
     Returns:
         float: Accuracy score rounded to 3 decimal places.
     """
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
-    if apply_smote:
-        smote = SMOTE(random_state=42)
-        X_train, y_train = smote.fit_resample(X_train, y_train)
+    X_train, X_test, y_train, y_test = split_data(X, y, test_size=test_size, apply_smote=apply_smote)
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
     return round(accuracy_score(y_test, y_pred) * 100, 3)
 
 
+def cross_validation_acc(X: pd.DataFrame, y: pd.DataFrame, model: Union[DecisionTreeClassifier, RandomForestClassifier],
+                         cv_fold: int = 5, apply_smote: bool = False) -> float:
+    """
+    Performs cross-validation for a classification model with SMOTE applied to address class imbalance.
+
+    Parameters:
+        X (pd.DataFrame): The dataset containing features.
+        y (pd.DataFrame): The target variable.
+        model (Union[DecisionTreeClassifier, RandomForestClassifier]): The classification model to evaluate.
+        cv_fold (int): Number of cross-validation folds (default is 10).
+        apply_smote (bool): Whether to apply SMOTE to the dataset (default is False).
+
+    Returns:
+        float: Mean cross-validation score rounded to 3 decimal places.
+    """
+    if apply_smote:
+        smote = SMOTE(random_state=42)
+        X, y = smote.fit_resample(X, y)
+    return round(cross_val_score(model, X, y, cv=cv_fold).mean() * 100, 3)
+
+
 # Task 2:
-def analyze_tree_complexity(feature_names: list, tree: DecisionTreeClassifier) -> None:
+def analyze_tree_complexity(X: pd.DataFrame, y: pd.DataFrame, tree: DecisionTreeClassifier) -> None:
     """
     Produces graphs showing detailed information about the complexity and structure of the decision tree.
 
     Parameters:
-        feature_names (list): List of feature names.
+        X (pd.DataFrame): The dataset containing features.
+        y (pd.DataFrame): The target variable.
         tree (DecisionTreeClassifier): Trained decision tree model
     """
+
+    tree.fit(X, y)
+
+    feature_names = X.columns.tolist()
+
     # Basic tree properties
     depth = tree.get_depth()
     n_leaves = tree.get_n_leaves()
@@ -228,10 +253,10 @@ def analyze_tree_complexity(feature_names: list, tree: DecisionTreeClassifier) -
         else:
             internal_nodes += 1
 
-    print(f"Tree Depth: {depth}\n"
-          f"Number of Leaves: {n_leaves}\n"
-          f"Number of Nodes: {n_nodes}\n"
-          f"Internal Nodes: {internal_nodes}\n"
+    print(f"Tree Depth: {depth} - "
+          f"Number of Leaves: {n_leaves} - "
+          f"Number of Nodes: {n_nodes} - "
+          f"Internal Nodes: {internal_nodes} - "
           f"Leaf Nodes: {leaf_nodes}")
 
     feature_importances = tree.feature_importances_
@@ -251,7 +276,7 @@ def analyze_tree_complexity(feature_names: list, tree: DecisionTreeClassifier) -
 
 # Task 3
 ## Task 3.1: Simplification-based Technique
-def apply_surrogate_models_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
+def apply_surrogate_models_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
     Applies a simplification-based XAI technique (using a decision tree to approximate a random forest).
 
@@ -263,30 +288,33 @@ def apply_surrogate_models_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomFor
     Returns:
         None: Prints accuracy and displays the visualized decision tree.
     """
+
     # Train a decision tree to approximate the random forest
     surrogate_tree = DecisionTreeClassifier(max_depth=3, random_state=42)
-    surrogate_tree.fit(X, model.fit(X, y).predict(X))
+    surrogate_tree.fit(X, model.fit(X,y).predict(X))
 
     # Evaluate the surrogate model
     accuracy = holdout_accuracy(X, y, surrogate_tree)
     print(f"Surrogate Model Accuracy: {accuracy}%")
 
 
-def apply_rule_extraction_xai(model, data: pd.DataFrame, target_column: str = 'Satisfaction', min_coverage: int = 10) -> pd.DataFrame:
+def apply_rule_extraction_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier,
+                              min_coverage: int = 10) -> tuple[DataFrame, DataFrame]:
     """
     Extracts, prunes, and summarizes rules from a Random Forest model.
 
     Parameters:
-        model (RandomForestClassifier): The trained Random Forest model.
-        data (pd.DataFrame): The dataset containing features and the target column.
-        target_column (str): The name of the target column.
+        X (pd.DataFrame): The dataset containing features.
+        y (pd.DataFrame): The target variable.
+        model (RandomForestClassifier): The Random Forest model.
         min_coverage (int): The minimum coverage threshold to keep a rule.
-        save_to_file (str, optional): Path to save the pruned rules as a CSV file. If None, no file is saved.
 
     Returns:
         pd.DataFrame: A DataFrame containing the pruned rules and their metadata.
     """
-    feature_names = data.drop(columns=[target_column]).columns
+    model.fit(X, y)
+
+    feature_names = X.columns
     rules_list = []
 
     # Step 1: Rule Extraction
@@ -303,7 +331,7 @@ def apply_rule_extraction_xai(model, data: pd.DataFrame, target_column: str = 'S
                 threshold = tree_.threshold[node]
                 left = tree_.children_left[node]
                 right = tree_.children_right[node]
-                
+
                 # Add condition for the left branch
                 recurse(left, conditions + [f"{name} <= {threshold:.2f}"])
                 # Add condition for the right branch
@@ -359,16 +387,16 @@ def apply_rule_extraction_xai(model, data: pd.DataFrame, target_column: str = 'S
         """
         # Define the operators in order of priority
         operators = ['>=', '<=', '>', '<']
-        
+
         # Find and split using the first operator encountered
         for op in operators:
             if op in condition:
                 return condition.split(op)[0].strip()
-        
+
         # Return the condition itself if no operator is found
         return condition.strip()
 
-    def summarize_rules(rules_df: pd.DataFrame) -> None:
+    def summarize_rules(rules_df: pd.DataFrame) -> DataFrame:
         """
         Summarizes the extracted rules.
 
@@ -380,8 +408,6 @@ def apply_rule_extraction_xai(model, data: pd.DataFrame, target_column: str = 'S
         """
         # Count rules by predicted class
         class_summary = rules_df.groupby('predicted_class').size()
-        print("Number of rules per class:")
-        print(class_summary)
 
         # Analyze feature frequency in rules
         feature_frequency = {}
@@ -396,13 +422,13 @@ def apply_rule_extraction_xai(model, data: pd.DataFrame, target_column: str = 'S
         # Create a sorted DataFrame for feature frequency
         feature_summary = pd.DataFrame.from_dict(feature_frequency, orient='index', columns=['frequency'])
         feature_summary = feature_summary.sort_values(by='frequency', ascending=False)
-        print("\nFeature frequency in rules:")
-        print(feature_summary)
+
         return feature_summary
 
     feature_summary = summarize_rules(pruned_rules_df)
 
-    return feature_summary,pruned_rules_df
+    return feature_summary, pruned_rules_df
+
 
 def plot_feature_importance_from_rules(feature_summary: pd.DataFrame):
     """
@@ -416,10 +442,10 @@ def plot_feature_importance_from_rules(feature_summary: pd.DataFrame):
     """
     # Normalize the importance (to sum up to 100%)
     feature_summary['Importance (%)'] = (feature_summary['frequency'] / feature_summary['frequency'].sum()) * 100
-    
+
     # Sort the features by importance
     feature_summary = feature_summary.sort_values(by='Importance (%)', ascending=False)
-    
+
     # Plot the graph
     plt.figure(figsize=(10, 6))
     plt.barh(feature_summary.index, feature_summary['Importance (%)'], color='skyblue')
@@ -428,8 +454,9 @@ def plot_feature_importance_from_rules(feature_summary: pd.DataFrame):
     plt.gca().invert_yaxis()  # Invert the y-axis to show the most important features on top
     plt.show()
 
+
 def parse_condition(condition: str):
-        """
+    """
         Parse a condition like "Feature1 <= 45" into feature, operator, and value.
 
         Parameters:
@@ -440,18 +467,20 @@ def parse_condition(condition: str):
             operator (str): The comparison operator (e.g., '<=' or '>').
             value (float): The value to compare (e.g., 45).
         """
-        operators = ['<=', '<', '>=', '>', '=']
-        
-        # Try to find the operator in the condition
-        for operator in operators:
-            if operator in condition:
-                feature, value = condition.split(operator)
-                return feature.strip(), operator, float(value.strip())
-        
-        # If no operator is found, raise an error
-        raise ValueError(f"Invalid condition format: {condition}")
+    operators = ['<=', '<', '>=', '>', '=']
 
-def evaluate_rule_extraction_accuracy(rules_df: pd.DataFrame, data: pd.DataFrame, target_column: str = 'Satisfaction') -> float:
+    # Try to find the operator in the condition
+    for operator in operators:
+        if operator in condition:
+            feature, value = condition.split(operator)
+            return feature.strip(), operator, float(value.strip())
+
+    # If no operator is found, raise an error
+    raise ValueError(f"Invalid condition format: {condition}")
+
+
+def evaluate_rule_extraction_accuracy(rules_df: pd.DataFrame, data: pd.DataFrame,
+                                      target_column: str = 'Satisfaction') -> float:
     """
     Evaluates the accuracy of the rule extraction technique by comparing predictions based on extracted rules with the true labels.
     
@@ -474,7 +503,7 @@ def evaluate_rule_extraction_accuracy(rules_df: pd.DataFrame, data: pd.DataFrame
         for _, rule in rules_df.iterrows():
             rule_conditions = rule['rule'].split(" AND ")
             rule_predicted_class = rule['predicted_class']
-            
+
             # Assume the rule applies until proven otherwise
             rule_applies = True
 
@@ -499,40 +528,44 @@ def evaluate_rule_extraction_accuracy(rules_df: pd.DataFrame, data: pd.DataFrame
                 elif operator == '=' and feature_value != value:
                     rule_applies = False
                     break
-            
+
             # If the rule applies, assign the predicted class and stop checking further rules
             if rule_applies:
                 predicted_class = rule_predicted_class
                 break
-        
+
         # If no rule matched, use a default class (e.g., -1 for no match)
         predictions.append(predicted_class if predicted_class is not None else -1)
-    
+
     # Compute and return the accuracy score
     accuracy = accuracy_score(true_labels, predictions)
     return accuracy
-    
 
-    
+
 ## Task 3.2: Feature-based Techniques
-def apply_permutation_importance_xai(X: pd.DataFrame,y: pd.DataFrame, model: RandomForestClassifier) -> None:
+def apply_permutation_importance_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
-    Applies two feature-based XAI techniques (Permutation Importance and SHAP Values) to the random forest model.
+    Explain a prediction using LIME.
 
     Parameters:
-        X (pd.DataFrame): The dataset containing features.
-        y (pd.DataFrame): The target variable.
-        model (RandomForestClassifier): The trained black-box model.
+    - X: Features (pandas DataFrame).
+    - y: Target variable (pandas DataFrame or Series).
+    - model: Trained RandomForestClassifier model.
+    - sample_index: Index of the sample in the test set to explain.
 
     Returns:
-        None: Prints and compares feature importance metrics.
+    - LIME explanation visualization in the notebook.
     """
     # Permutation Importance
-    print("Permutation Importance:")
-    perm_importance = permutation_importance(model, X, y, n_repeats=10, random_state=42)
+    # Split data into training and test sets
+    X_train, X_test, y_train, y_test = split_data(X, y)
+
+    # Train the model
+    model.fit(X_train, y_train)
+
+    perm_importance = permutation_importance(model, X_test, y_test, n_repeats=10, random_state=42)
     perm_importances_df = pd.Series(perm_importance.importances_mean, index=X.columns)
-    perm_importances_df = perm_importances_df.sort_values(ascending=False) # Feattures mais importantes primeiro
-    print(perm_importances_df)
+    perm_importances_df = perm_importances_df.sort_values(ascending=False)
 
     # Plotting Permutation Importance
     plt.figure(figsize=(10, 6))
@@ -544,86 +577,126 @@ def apply_permutation_importance_xai(X: pd.DataFrame,y: pd.DataFrame, model: Ran
     plt.tight_layout()
     plt.show()
 
-def apply_lime_xai(X: pd.DataFrame, model, sample_index: int):
+
+def apply_lime_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier, sample_index: int = 0) -> None:
     """
-    Applies LIME to explain a single prediction of the model.
-    
+    Explain a prediction using LIME and display only the Matplotlib graph.
+
     Parameters:
-        X (pd.DataFrame): Feature dataset.
-        model (RandomForestClassifier): The trained machine learning model.
-        sample_index (int): Index of the sample to explain.
-        
+    - X: Features (pandas DataFrame).
+    - y: Target variable (pandas DataFrame or Series).
+    - model: RandomForestClassifier model.
+    - sample_index: Index of the sample in the test set to explain. Default is 0.
+
     Returns:
-        None: Prints the explanation and plots the feature contributions.
+    - None: Displays the Matplotlib graph.
     """
-    # Criar o interpretador LIME para dados tabulares
-    explainer = lime.lime_tabular.LimeTabularExplainer(
-        training_data=X.values,
-        feature_names=X.columns,
-        class_names=['0', '1'], 
-        mode='classification'
-    )
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
-    # Selecionar uma amostra do dataset
-    sample = X.iloc[sample_index].values 
+    # Train the model
+    model.fit(X_train, y_train)
 
-    # Gerar explicação
-    explanation = explainer.explain_instance(
-        data_row=sample, 
-        predict_fn=model.predict_proba  # Função de predição para probabilidade
-    )
+    # Create a LimeTabularExplainer
+    explainer = LimeTabularExplainer(X_train.values,
+                                     feature_names=X.columns.tolist(),
+                                     class_names=y.unique().astype(str).tolist(),
+                                     mode='classification')
 
-    # Exibir explicação
-    print("Explanation for sample index:", sample_index)
-    explanation.show_in_notebook(show_all=False)
+    # Select the sample to explain
+    sample = X_test.iloc[sample_index].values
 
-    # Visualizar contribuições das features
-    explanation.as_pyplot_figure()
+    # Wrap the model's predict_proba method to ensure it works with raw NumPy arrays
+    def predict_proba_fn(data):
+        data_df = pd.DataFrame(data, columns=X_train.columns)
+        return model.predict_proba(data_df)
+
+    # Generate explanation
+    explanation = explainer.explain_instance(sample, predict_proba_fn, num_features=X.shape[1])
+
+    # Visualize feature contributions with Matplotlib
+    fig = explanation.as_pyplot_figure()
     plt.title(f"Feature Contributions for Sample {sample_index}")
+    plt.tight_layout()
     plt.show()
 
 
-def apply_shap_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier) -> None:
-    
-    # SHAP Values
-    print("\nSHAP Values:")
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X)
-    shap.summary_plot(shap_values, X, plot_type="bar")
+def apply_shap_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier, subset_size: int = 100) -> None:
+    """
+    Explain a prediction using SHAP with a subset of the data for faster computation.
 
-    # Compare insights
-    print("\nFeature-based explanations compared:")
-    print("- Permutation Importance and SHAP provide different but complementary insights into feature relevance.")
+    Parameters:
+    - X: Features (pandas DataFrame).
+    - y: Target variable (pandas DataFrame or Series).
+    - model: RandomForestClassifier model.
+    - sample_index: Index of the sample in the test set to explain. Default is 0.
+    - subset_size: Number of samples to use for SHAP explanation. Default is 100.
+
+    Returns:
+    - SHAP explanation visualization in the notebook.
+    """
+
+    # Split data into training and test sets
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+    # Train the model
+    model.fit(X_train, y_train)
+
+    # Take a subset of the test data
+    subset = X_test.sample(subset_size, random_state=42)
+
+    # Create a SHAP explainer for the Random Forest model
+    explainer = shap.TreeExplainer(model)
+
+    # Compute SHAP values for the subset
+    shap_values = explainer.shap_values(subset)
+
+    # SHAP bar plot (average absolute SHAP value per feature)
+    plt.title("SHAP Bar Plot (Feature Importance)")
+    shap.summary_plot(shap_values[1], subset, feature_names=X.columns, plot_type="bar")
 
 
 ## Task 3.3: Example-based Techniques
-def apply_example_based_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier,
-                            num_examples: int = 3) -> None:
+def generate_anchor_rule(X, y, model, instance_index):
     """
-    Applies an example-based XAI technique (SHAP force plot) for individual predictions.
+    Generate and print an anchor rule for a specific data instance using a RandomForestClassifier.
 
     Parameters:
-        X (pd.DataFrame): The dataset containing features.
-        y (pd.DataFrame): The target variable.
-        model (RandomForestClassifier): The trained black-box model.
-        num_examples (int): Number of random examples to explain. Default is 3.
-
-    Returns:
-        None: Displays SHAP force plots for the given examples.
+    - X (pd.DataFrame): The feature dataset.
+    - y (pd.Series): The target variable.
+    - model (sklearn.base.BaseEstimator): The trained model.
+    - instance_index (int): Index of the sample to explain.
     """
-    # Initialize SHAP TreeExplainer
-    explainer = shap.TreeExplainer(model)
-    shap_values = explainer.shap_values(X)
+    # Train the model
+    model.fit(X, y)
 
-    # Randomly select examples
-    random_indices = random.sample(range(len(X)), num_examples)
+    # Define the predictor function to handle feature names
+    def predict_fn(data):
+        data_df = pd.DataFrame(data, columns=X.columns)
+        return model.predict(data_df)
 
-    for i, idx in enumerate(random_indices):
-        print(f"Explanation for Example {i + 1} (Index: {idx}):")
-        sample = X.iloc[idx]
-        shap.force_plot(
-            explainer.expected_value[1],
-            shap_values[1][idx],
-            sample,
-            matplotlib=True
-        )
+    # Initialize the AnchorTabular explainer
+    explainer = AnchorTabular(predictor=predict_fn, feature_names=X.columns.tolist())
+    explainer.fit(X.values)
+
+    # Select the instance to explain
+    instance = X.iloc[instance_index].values.reshape(1, -1)
+
+    # Generate the explanation
+    return explainer.explain(instance[0], threshold=0.95)
+
+def evaluate_explanation(explanation, instance_index, target_value):
+    """
+    Evaluates the quality of an anchor explanation.
+
+    Parameters:
+    - explanation: AnchorTabular explanation object.
+    - instance_index: Index of the explained instance.
+    - target_value: Target value of the instance.
+    """
+    print(f"\nEvaluation for row {instance_index}:")
+    print(f" - Target value: {target_value}")
+    print(f" - Rule: {' AND '.join(explanation.anchor)}")
+    print(f" - Precision: {explanation.precision * 100:.2f}% (accuracy of rule predictions)")
+    print(f" - Coverage: {explanation.coverage * 100:.2f}% (dataset fraction where rule applies)")
+    print(f" - Sparsity: {len(explanation.anchor)} feature(s) used in the rule (simplicity)")
