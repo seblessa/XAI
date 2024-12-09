@@ -682,7 +682,7 @@ def generate_anchor_rule(X, y, model, instance_index):
     instance = X.iloc[instance_index].values.reshape(1, -1)
 
     # Generate the explanation
-    return explainer.explain(instance[0], threshold=0.95)
+    return explainer.explain(instance[0], threshold=0.85)
 
 def evaluate_explanation(explanation, instance_index, target_value):
     """
