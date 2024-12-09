@@ -551,10 +551,9 @@ def apply_permutation_importance_xai(X: pd.DataFrame, y: pd.DataFrame, model: Ra
     - X: Features (pandas DataFrame).
     - y: Target variable (pandas DataFrame or Series).
     - model: Trained RandomForestClassifier model.
-    - sample_index: Index of the sample in the test set to explain.
 
     Returns:
-    - LIME explanation visualization in the notebook.
+    A bar chart visualizing the Permutation Importance of each feature.
     """
     # Permutation Importance
     # Split data into training and test sets
@@ -578,7 +577,7 @@ def apply_permutation_importance_xai(X: pd.DataFrame, y: pd.DataFrame, model: Ra
     plt.show()
 
 
-def apply_lime_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier, sample_index: int = 0) -> None:
+def apply_lime_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier, sample_index: int) -> None:
     """
     Explain a prediction using LIME and display only the Matplotlib graph.
 
