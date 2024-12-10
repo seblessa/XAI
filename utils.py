@@ -2,10 +2,12 @@ from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.inspection import permutation_importance
 from sklearn.ensemble import RandomForestClassifier
 from lime.lime_tabular import LimeTabularExplainer
+from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.metrics import accuracy_score
 from alibi.explainers import AnchorTabular
 from imblearn.over_sampling import SMOTE
+from sklearn.decomposition import PCA
 from sklearn.impute import KNNImputer
 from IPython.display import display
 import matplotlib.pyplot as plt
@@ -145,6 +147,51 @@ def visualize_feature_distributions(df: pd.DataFrame) -> None:
     df.hist(bins=20, figsize=(18, 10), edgecolor='black')
     plt.subplots_adjust(hspace=0.5, wspace=0.4)
     plt.suptitle('Feature Distributions', fontsize=16)
+    plt.show()
+
+
+def visualize_data_with_pca(X: pd.DataFrame, y: pd.Series):
+    """
+    Visualize the dataset in 2D using PCA, with color indicating the target classes.
+
+    Parameters:
+    - X (pd.DataFrame): Feature dataset.
+    - y (pd.Series): Target variable (0: Neutral or Dissatisfied, 1: Satisfied).
+
+    Returns:
+    - None: Displays the PCA visualization.
+    """
+    # Standardize the data for PCA
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    # Apply PCA to reduce to 2D
+    pca = PCA(n_components=2)
+    X_pca = pca.fit_transform(X_scaled)
+
+    # Create a scatter plot for the two classes
+    plt.figure(figsize=(10, 8))
+
+    # Plot Neutral or Dissatisfied (class 0)
+    plt.scatter(
+        X_pca[y == 0, 0], X_pca[y == 0, 1], 
+        c='red', label='Neutral or Dissatisfied (0)', 
+        alpha=0.7, edgecolor='k', s=50
+    )
+
+    # Plot Satisfied (class 1)
+    plt.scatter(
+        X_pca[y == 1, 0], X_pca[y == 1, 1], 
+        c='green', label='Satisfied (1)', 
+        alpha=0.7, edgecolor='k', s=50
+    )
+
+    # Add plot details
+    plt.title('PCA Visualization of Dataset')
+    plt.xlabel('Principal Component 1')
+    plt.ylabel('Principal Component 2')
+    plt.legend(loc='best')
+    plt.tight_layout()
     plt.show()
 
 
@@ -543,9 +590,9 @@ def evaluate_rule_extraction_accuracy(rules_df: pd.DataFrame, data: pd.DataFrame
 
 
 ## Task 3.2: Feature-based Techniques
-def apply_permutation_importance_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier) -> None:
+def apply_permutation_importance_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
-    Explain a prediction using LIME.
+    Explain a prediction using permutation importance.
 
     Parameters:
     - X: Features (pandas DataFrame).
@@ -557,49 +604,50 @@ def apply_permutation_importance_xai(X: pd.DataFrame, y: pd.DataFrame, model: Ra
     """
     # Permutation Importance
     # Split data into training and test sets
-    X_train, X_test, y_train, y_test = split_data(X, y)
+    # X_train, X_test, y_train, y_test = split_data(X, y)
 
     # Train the model
     model.fit(X_train, y_train)
 
     perm_importance = permutation_importance(model, X_test, y_test, n_repeats=10, random_state=42)
-    perm_importances_df = pd.Series(perm_importance.importances_mean, index=X.columns)
+    perm_importances_df = pd.Series(perm_importance.importances_mean, index=X_train.columns)
     perm_importances_df = perm_importances_df.sort_values(ascending=False)
 
     # Plotting Permutation Importance
     plt.figure(figsize=(10, 6))
-    perm_importances_df.plot(kind='bar', color='skyblue', edgecolor='black')
+    perm_importances_df.plot(kind='barh', color='skyblue', edgecolor='black')
     plt.title("Permutation Importance (Feature Importance)")
     plt.xlabel("Features")
     plt.ylabel("Importance Score")
     plt.xticks(rotation=45, ha="right")
     plt.tight_layout()
+    plt.gca().invert_yaxis()
     plt.show()
 
 
-def apply_lime_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier, sample_index: int) -> None:
+def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, sample_index: int) -> None:
     """
     Explain a prediction using LIME and display only the Matplotlib graph.
 
     Parameters:
-    - X: Features (pandas DataFrame).
-    - y: Target variable (pandas DataFrame or Series).
+    - X_train: Training features (pandas DataFrame).
+    - X_test: Test features (pandas DataFrame).
+    - y_train: Training target variable (pandas DataFrame or Series).
+    - y_test: Test target variable (pandas DataFrame or Series).
     - model: RandomForestClassifier model.
     - sample_index: Index of the sample in the test set to explain. Default is 0.
 
     Returns:
     - None: Displays the Matplotlib graph.
     """
-    # Train-test split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
     # Train the model
     model.fit(X_train, y_train)
 
     # Create a LimeTabularExplainer
     explainer = LimeTabularExplainer(X_train.values,
-                                     feature_names=X.columns.tolist(),
-                                     class_names=y.unique().astype(str).tolist(),
+                                     feature_names=X_train.columns.tolist(),
+                                     class_names=y_train.unique().astype(str).tolist(),
                                      mode='classification')
 
     # Select the sample to explain
@@ -611,7 +659,7 @@ def apply_lime_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifi
         return model.predict_proba(data_df)
 
     # Generate explanation
-    explanation = explainer.explain_instance(sample, predict_proba_fn, num_features=X.shape[1])
+    explanation = explainer.explain_instance(sample, predict_proba_fn, num_features=X_train.shape[1])
 
     # Visualize feature contributions with Matplotlib
     fig = explanation.as_pyplot_figure()
@@ -620,23 +668,22 @@ def apply_lime_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifi
     plt.show()
 
 
-def apply_shap_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier, subset_size: int = 100) -> None:
+def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, subset_size: int = 100) -> None:
     """
     Explain a prediction using SHAP with a subset of the data for faster computation.
 
     Parameters:
     - X: Features (pandas DataFrame).
-    - y: Target variable (pandas DataFrame or Series).
+    - X_train: Training features (pandas DataFrame).
+    - X_test: Test features (pandas DataFrame).
+    - y_train: Training target variable (pandas DataFrame or Series).
+    - y_test: Test target variable (pandas DataFrame or Series).
     - model: RandomForestClassifier model.
-    - sample_index: Index of the sample in the test set to explain. Default is 0.
     - subset_size: Number of samples to use for SHAP explanation. Default is 100.
 
     Returns:
     - SHAP explanation visualization in the notebook.
     """
-
-    # Split data into training and test sets
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
 
     # Train the model
     model.fit(X_train, y_train)
@@ -652,10 +699,60 @@ def apply_shap_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifi
 
     # SHAP bar plot (average absolute SHAP value per feature)
     plt.title("SHAP Bar Plot (Feature Importance)")
-    shap.summary_plot(shap_values[1], subset, feature_names=X.columns, plot_type="bar")
+    shap.summary_plot(shap_values[1], subset, feature_names=X_train.columns, plot_type="bar")
 
 
+    
 ## Task 3.3: Example-based Techniques
+def find_instances_by_coverage(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, threshold=0.85):
+    """
+    Find two instances (high and low coverage) from the test set using Anchors.
+
+    Parameters:
+    - X_train (pd.DataFrame): Training feature dataset.
+    - X_test (pd.DataFrame): Test feature dataset.
+    - y_train (pd.DataFrame): Training target dataset.
+    - y_test (pd.DataFrame): Test target dataset.
+    - model (RandomForestClassifier): Trained classification model.
+    - threshold (float): Threshold for Anchors rule precision.
+
+    Returns:
+    - (int, int): Indices of the high-coverage and low-coverage instances in the test set.
+    """
+    # Ensure the model is trained
+    model.fit(X_train, y_train)
+    
+    # Define the predictor function for Anchors
+    def predict_fn(data):
+        data_df = pd.DataFrame(data, columns=X_train.columns)
+        return model.predict(data_df)
+    
+    # Initialize the AnchorTabular explainer
+    explainer = AnchorTabular(predict_fn, feature_names=X_train.columns.tolist())
+    print("Fitting the explainer...")
+    explainer.fit(X_train.values)
+    print("Explainer fitted.")
+
+    # Store coverage values for all instances in the test set
+    coverage_list = []
+    print(len(X_test))
+    for idx in range(len(X_test)):
+        instance = X_test.iloc[idx].values
+        explanation = explainer.explain(instance, threshold=threshold)
+        print(".")
+        coverage_list.append((idx, explanation.coverage))
+        
+    print("Coverage list created.")
+    # Sort instances by coverage
+    coverage_list = sorted(coverage_list, key=lambda x: x[1])
+    
+    # Get the lowest and highest coverage instances
+    low_coverage_idx = coverage_list[0][0]
+    high_coverage_idx = coverage_list[-1][0]
+    
+    return high_coverage_idx, low_coverage_idx
+
+
 def generate_anchor_rule(X, y, model, instance_index):
     """
     Generate and print an anchor rule for a specific data instance using a RandomForestClassifier.
