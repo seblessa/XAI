@@ -668,7 +668,7 @@ def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
     plt.show()
 
 
-def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, subset_size: int = 100) -> None:
+def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, subset_size: int = 50) -> None:
     """
     Explain a prediction using SHAP with a subset of the data for faster computation.
 
@@ -696,7 +696,41 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
 
     # Compute SHAP values for the subset
     shap_values = explainer.shap_values(subset)
+    base_value = explainer.expected_value[1]  # Base value for class 1
+    # Compute model predictions for the subset
+    predictions = model.predict_proba(subset)[:, 1]  # Probability for class 1
+    
+    # Fidelity metric: SHAP contributions + base value should match predictions
+    shap_sums = np.sum(shap_values[1], axis=1) + base_value
+    fidelity_error = np.abs(shap_sums - predictions)
+    fidelity_score = np.mean(fidelity_error)
+    print(f"Fidelity Score (Mean Absolute Error): {fidelity_score:.4f}")
 
+    # Local accuracy: Inspect individual cases
+    for i in range(min(3, subset_size)):  # Display local accuracy for first 3 instances
+        print(f"\nInstance {i+1}:")
+        print(f"Model Prediction: {predictions[i]:.4f}")
+        print(f"SHAP Sum + Base Value: {shap_sums[i]:.4f}")
+        print(f"Local Accuracy Error: {fidelity_error[i]:.4f}")
+    # Visualization of fidelity errors
+    plt.figure(figsize=(14, 6))
+    
+    # Plot 1: Histogram
+    plt.subplot(1, 2, 1)
+    sns.histplot(fidelity_error, bins=20, kde=True, color='skyblue')
+    plt.title("Histogram of Fidelity Errors")
+    plt.xlabel("Fidelity Error (|SHAP Sum + Base - Prediction|)")
+    plt.ylabel("Frequency")
+    
+    # Plot 2: Box Plot
+    plt.subplot(1, 2, 2)
+    sns.boxplot(fidelity_error, color='lightcoral')
+    plt.title("Box Plot of Fidelity Errors")
+    plt.xlabel("Fidelity Errors")
+    
+    # Show plots
+    plt.tight_layout()
+    
     # SHAP bar plot (average absolute SHAP value per feature)
     plt.title("SHAP Bar Plot (Feature Importance)")
     shap.summary_plot(shap_values[1], subset, feature_names=X_train.columns, plot_type="bar")
