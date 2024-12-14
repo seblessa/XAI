@@ -169,6 +169,10 @@ def visualize_data_with_pca(X: pd.DataFrame, y: pd.Series):
     pca = PCA(n_components=2)
     X_pca = pca.fit_transform(X_scaled)
 
+    # Print the explained variance ratio for each principal component
+    print("Explained variance ratio per component:")
+    print(pca.explained_variance_ratio_)
+
     # Create a scatter plot for the two classes
     plt.figure(figsize=(10, 8))
 
@@ -526,69 +530,6 @@ def parse_condition(condition: str):
     raise ValueError(f"Invalid condition format: {condition}")
 
 
-def evaluate_rule_extraction_accuracy(rules_df: pd.DataFrame, data: pd.DataFrame,
-                                      target_column: str = 'Satisfaction') -> float:
-    """
-    Evaluates the accuracy of the rule extraction technique by comparing predictions based on extracted rules with the true labels.
-    
-    Parameters:
-        rules_df (pd.DataFrame): The DataFrame containing the pruned rules.
-        data (pd.DataFrame): The dataset containing the features.
-        target_column (str): The name of the target column.
-        
-    Returns:
-        float: Accuracy of the rule-based predictions.
-    """
-    # Initialize an empty list to store predictions
-    predictions = []
-    true_labels = data[target_column]
-
-    # Loop through each row of the dataset
-    for _, row in data.iterrows():
-        predicted_class = None
-        # Iterate through the pruned rules and apply them
-        for _, rule in rules_df.iterrows():
-            rule_conditions = rule['rule'].split(" AND ")
-            rule_predicted_class = rule['predicted_class']
-
-            # Assume the rule applies until proven otherwise
-            rule_applies = True
-
-            # Evaluate each condition in the rule for the current row
-            for condition in rule_conditions:
-                feature, operator, value = parse_condition(condition)
-                feature_value = row[feature]
-
-                # Compare the feature value with the rule's condition
-                if operator == '<=' and feature_value > value:
-                    rule_applies = False
-                    break
-                elif operator == '<' and feature_value >= value:
-                    rule_applies = False
-                    break
-                elif operator == '>=' and feature_value < value:
-                    rule_applies = False
-                    break
-                elif operator == '>' and feature_value <= value:
-                    rule_applies = False
-                    break
-                elif operator == '=' and feature_value != value:
-                    rule_applies = False
-                    break
-
-            # If the rule applies, assign the predicted class and stop checking further rules
-            if rule_applies:
-                predicted_class = rule_predicted_class
-                break
-
-        # If no rule matched, use a default class (e.g., -1 for no match)
-        predictions.append(predicted_class if predicted_class is not None else -1)
-
-    # Compute and return the accuracy score
-    accuracy = accuracy_score(true_labels, predictions)
-    return accuracy
-
-
 ## Task 3.2: Feature-based Techniques
 def apply_permutation_importance_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
@@ -668,7 +609,7 @@ def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
     plt.show()
 
 
-def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, subset_size: int = 50) -> None:
+def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, subset_sizes: int = [10, 50, 100]) -> None:
     """
     Explain a prediction using SHAP with a subset of the data for faster computation.
 
@@ -688,52 +629,76 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
     # Train the model
     model.fit(X_train, y_train)
 
-    # Take a subset of the test data
-    subset = X_test.sample(subset_size, random_state=42)
+    # Store fidelity scores for each subset size
+    fidelity_scores = []
 
-    # Create a SHAP explainer for the Random Forest model
-    explainer = shap.TreeExplainer(model)
+    for subset_size in subset_sizes:
+        # Take a subset of the test data
+        subset = X_test.sample(subset_size, random_state=42)
 
-    # Compute SHAP values for the subset
-    shap_values = explainer.shap_values(subset)
-    base_value = explainer.expected_value[1]  # Base value for class 1
-    # Compute model predictions for the subset
-    predictions = model.predict_proba(subset)[:, 1]  # Probability for class 1
-    
-    # Fidelity metric: SHAP contributions + base value should match predictions
-    shap_sums = np.sum(shap_values[1], axis=1) + base_value
-    fidelity_error = np.abs(shap_sums - predictions)
-    fidelity_score = np.mean(fidelity_error)
-    print(f"Fidelity Score (Mean Absolute Error): {fidelity_score:.4f}")
+        # Create a SHAP explainer for the Random Forest model
+        explainer = shap.TreeExplainer(model)
 
-    # Local accuracy: Inspect individual cases
-    for i in range(min(3, subset_size)):  # Display local accuracy for first 3 instances
-        print(f"\nInstance {i+1}:")
-        print(f"Model Prediction: {predictions[i]:.4f}")
-        print(f"SHAP Sum + Base Value: {shap_sums[i]:.4f}")
-        print(f"Local Accuracy Error: {fidelity_error[i]:.4f}")
-    # Visualization of fidelity errors
-    plt.figure(figsize=(14, 6))
-    
-    # Plot 1: Histogram
-    plt.subplot(1, 2, 1)
-    sns.histplot(fidelity_error, bins=20, kde=True, color='skyblue')
-    plt.title("Histogram of Fidelity Errors")
-    plt.xlabel("Fidelity Error (|SHAP Sum + Base - Prediction|)")
-    plt.ylabel("Frequency")
-    
-    # Plot 2: Box Plot
-    plt.subplot(1, 2, 2)
-    sns.boxplot(fidelity_error, color='lightcoral')
-    plt.title("Box Plot of Fidelity Errors")
-    plt.xlabel("Fidelity Errors")
-    
-    # Show plots
+        # Compute SHAP values for the subset
+        shap_values = explainer.shap_values(subset)
+        shap_values_class_0 = shap_values[0]  # Valores SHAP para a classe 0
+        shap_values_class_1 = shap_values[1]
+
+
+        base_value_0 = explainer.expected_value[0]  # Base value for class 0
+        print("Base value for classe 0", base_value_0)
+        base_value_1 = explainer.expected_value[1]  # Base value for class 1
+        print("Base value for classe 1", base_value_1)
+
+        # Compute model predictions for the subset
+        predictions = model.predict_proba(subset)  # Probabilities for both classes (0 and 1)
+        #print(predictions[:10])  # Para ver as primeiras previsões
+        predictions_class_0 = predictions[:, 0]  # Probability for class 0
+        #print(predictions_class_0)
+        predictions_class_1 = predictions[:, 1]  # Probability for class 1
+        #print(predictions_class_1)
+        
+        # Fidelity metric for class 0:
+        shap_sums_class_0 = np.sum(shap_values_class_0, axis=1) + base_value_0
+        fidelity_error_class_0 = np.abs(shap_sums_class_0 - predictions_class_0)
+        fidelity_score_class_0 = np.mean(fidelity_error_class_0)
+
+        # Fidelity metric for class 1:
+        shap_sums_class_1 = np.sum(shap_values_class_1, axis=1) + base_value_1
+        fidelity_error_class_1 = np.abs(shap_sums_class_1 - predictions_class_1)
+        fidelity_score_class_1 = np.mean(fidelity_error_class_1)
+
+        # Combine fidelity scores for both classes into a global fidelity score
+        global_fidelity_score = (fidelity_score_class_0 + fidelity_score_class_1) / 2
+
+        # Append the global fidelity score to the list
+        fidelity_scores.append(global_fidelity_score)
+
+        print(f"Subset size: {subset_size}, Fidelity Score (Class 0): {fidelity_score_class_0:.4f}, Fidelity Score (Class 1): {fidelity_score_class_1:.4f}, Global Fidelity Score: {global_fidelity_score:.4f}")
+
+    # Plot the fidelity scores for different subset sizes
+    plt.figure(figsize=(10, 6))
+    plt.plot(subset_sizes, fidelity_scores, marker='o', linestyle='-', color='b')
+    plt.title("Fidelity Score vs. Subset Size")
+    plt.xlabel("Subset Size")
+    plt.ylabel("Mean Fidelity Error (MAE)")  # Fidelity score (global)
+    plt.grid(True)
     plt.tight_layout()
-    
+    plt.show()
+
     # SHAP bar plot (average absolute SHAP value per feature)
+    plt.figure(figsize=(10, 6))
     plt.title("SHAP Bar Plot (Feature Importance)")
-    shap.summary_plot(shap_values[1], subset, feature_names=X_train.columns, plot_type="bar")
+    shap.summary_plot(shap_values, subset)
+    # Summary plot para a classe 0
+    plt.title("Summary plot for class 0 - Neutral or Dissatisfied")
+    shap.summary_plot(shap_values_class_0, subset)
+
+    # Summary plot para a classe 1
+    plt.title("Summary plot for class 1 - Satisfied")
+    shap.summary_plot(shap_values_class_1, subset)
+    # SHAP decision plot for class 1
+    shap.decision_plot(explainer.expected_value[1], shap_values[1][12,:], X_test.columns)
 
 
     
