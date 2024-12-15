@@ -4,12 +4,13 @@ from sklearn.ensemble import RandomForestClassifier
 from lime.lime_tabular import LimeTabularExplainer
 from sklearn.preprocessing import StandardScaler
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import mean_squared_error
 from sklearn.metrics import accuracy_score
 from alibi.explainers import AnchorTabular
 from imblearn.over_sampling import SMOTE
-from sklearn.decomposition import PCA
+from sklearn.linear_model import Ridge
 from sklearn.impute import KNNImputer
-from IPython.display import display
+from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 from sklearn.tree import _tree
 from pandas import DataFrame
@@ -180,15 +181,15 @@ def visualize_data_with_pca(X: pd.DataFrame, y: pd.Series):
 
     # Plot Neutral or Dissatisfied (class 0)
     plt.scatter(
-        X_pca[y == 0, 0], X_pca[y == 0, 1], 
-        c='red', label='Neutral or Dissatisfied (0)', 
+        X_pca[y == 0, 0], X_pca[y == 0, 1],
+        c='red', label='Neutral or Dissatisfied (0)',
         alpha=0.7, edgecolor='k', s=50
     )
 
     # Plot Satisfied (class 1)
     plt.scatter(
-        X_pca[y == 1, 0], X_pca[y == 1, 1], 
-        c='green', label='Satisfied (1)', 
+        X_pca[y == 1, 0], X_pca[y == 1, 1],
+        c='green', label='Satisfied (1)',
         alpha=0.7, edgecolor='k', s=50
     )
 
@@ -344,7 +345,7 @@ def apply_surrogate_models_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomFo
 
     # Train a decision tree to approximate the random forest
     surrogate_tree = DecisionTreeClassifier(max_depth=3, random_state=42)
-    surrogate_tree.fit(X, model.fit(X,y).predict(X))
+    surrogate_tree.fit(X, model.fit(X, y).predict(X))
 
     # Evaluate the surrogate model
     accuracy = holdout_accuracy(X, y, surrogate_tree)
@@ -533,7 +534,8 @@ def parse_condition(condition: str):
 
 
 ## Task 3.2: Feature-based Techniques
-def apply_permutation_importance_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier) -> None:
+def apply_permutation_importance_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame,
+                                     y_test: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
     Explain a prediction using permutation importance.
 
@@ -568,50 +570,84 @@ def apply_permutation_importance_xai(X_train: pd.DataFrame, X_test: pd.DataFrame
     plt.show()
 
 
-def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, sample_index: int) -> None:
+def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Series, y_test: pd.Series, model,
+                   sample_index: int = 0) -> None:
     """
-    Explain a prediction using LIME and display only the Matplotlib graph.
+    Explain a prediction using LIME and display the explanation.
 
     Parameters:
     - X_train: Training features (pandas DataFrame).
     - X_test: Test features (pandas DataFrame).
-    - y_train: Training target variable (pandas DataFrame or Series).
-    - y_test: Test target variable (pandas DataFrame or Series).
-    - model: RandomForestClassifier model.
-    - sample_index: Index of the sample in the test set to explain. Default is 0.
+    - y_train: Training target variable (pandas Series).
+    - y_test: Test target variable (pandas Series).
+    - model: Trained model with a predict_proba method.
+    - sample_index: Index of the sample in the test set to explain.
 
     Returns:
-    - None: Displays the Matplotlib graph.
+    - None: Displays the LIME explanation.
     """
 
     # Train the model
     model.fit(X_train, y_train)
 
     # Create a LimeTabularExplainer
-    explainer = LimeTabularExplainer(X_train.values,
-                                     feature_names=X_train.columns.tolist(),
-                                     class_names=y_train.unique().astype(str).tolist(),
-                                     mode='classification')
+    explainer = LimeTabularExplainer(
+        X_train.values,
+        feature_names=X_train.columns.tolist(),
+        class_names=[str(cls) for cls in np.unique(y_train)],
+        mode='classification'
+    )
 
     # Select the sample to explain
     sample = X_test.iloc[sample_index].values
 
-    # Wrap the model's predict_proba method to ensure it works with raw NumPy arrays
+    # Define the prediction function
     def predict_proba_fn(data):
         data_df = pd.DataFrame(data, columns=X_train.columns)
         return model.predict_proba(data_df)
 
+    # Check the shape of the prediction to determine the output format
+    sample_prediction = predict_proba_fn([sample])
+    if sample_prediction.ndim == 1 or sample_prediction.shape[1] == 1:
+        # Model returns a single probability; infer the probability of class 0
+        def predict_proba_fn_adjusted(data):
+            probs = predict_proba_fn(data)
+            if probs.ndim == 1:
+                probs = np.expand_dims(probs, axis=1)
+            return np.hstack([1 - probs, probs])
+    else:
+        # Model returns probabilities for both classes
+        predict_proba_fn_adjusted = predict_proba_fn
+
+    # Define the surrogate model (Ridge Regression)
+    local_model = Ridge(alpha=1.0)
+
     # Generate explanation
-    explanation = explainer.explain_instance(sample, predict_proba_fn, num_features=X_train.shape[1])
+    explanation = explainer.explain_instance(
+        sample,
+        predict_proba_fn_adjusted,
+        num_features=X_train.shape[1],
+        model_regressor=local_model
+    )
 
-    # Visualize feature contributions with Matplotlib
-    fig = explanation.as_pyplot_figure()
-    plt.title(f"Feature Contributions for Sample {sample_index}")
-    plt.tight_layout()
-    plt.show()
+    # Display the explanation
+    explanation.show_in_notebook()
+
+    # Evaluate fidelity of LIME explanation using local fidelity (MSE)
+    # Get original model's prediction
+    original_model_prediction = predict_proba_fn_adjusted([sample])[0][1]
+
+    # Get surrogate model's prediction
+    surrogate_prediction = explanation.local_pred
+
+    # Compute fidelity score (MSE)
+    fidelity_score = mean_squared_error([original_model_prediction], [surrogate_prediction])
+
+    print(f"Local fidelity (MSE) of the LIME explanation for sample {sample_index}: {fidelity_score:.4f}")
 
 
-def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, subset_sizes: int = [10, 50, 100]) -> None:
+def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame,
+                   model: RandomForestClassifier, subset_sizes: int = [10, 50, 100]) -> None:
     """
     Explain a prediction using SHAP with a subset of the data for faster computation.
 
@@ -646,7 +682,6 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
         shap_values_class_0 = shap_values[0]  # Valores SHAP para a classe 0
         shap_values_class_1 = shap_values[1]
 
-
         base_value_0 = explainer.expected_value[0]  # Base value for class 0
         print("Base value for classe 0", base_value_0)
         base_value_1 = explainer.expected_value[1]  # Base value for class 1
@@ -659,7 +694,7 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
         #print(predictions_class_0)
         predictions_class_1 = predictions[:, 1]  # Probability for class 1
         #print(predictions_class_1)
-        
+
         # Fidelity metric for class 0:
         shap_sums_class_0 = np.sum(shap_values_class_0, axis=1) + base_value_0
         fidelity_error_class_0 = np.abs(shap_sums_class_0 - predictions_class_0)
@@ -676,7 +711,8 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
         # Append the global fidelity score to the list
         fidelity_scores.append(global_fidelity_score)
 
-        print(f"Subset size: {subset_size}, Fidelity Score (Class 0): {fidelity_score_class_0:.4f}, Fidelity Score (Class 1): {fidelity_score_class_1:.4f}, Global Fidelity Score: {global_fidelity_score:.4f}")
+        print(
+            f"Subset size: {subset_size}, Fidelity Score (Class 0): {fidelity_score_class_0:.4f}, Fidelity Score (Class 1): {fidelity_score_class_1:.4f}, Global Fidelity Score: {global_fidelity_score:.4f}")
 
     # Plot the fidelity scores for different subset sizes
     plt.figure(figsize=(10, 6))
@@ -700,10 +736,9 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
     plt.title("Summary plot for class 1 - Satisfied")
     shap.summary_plot(shap_values_class_1, subset)
     # SHAP decision plot for class 1
-    shap.decision_plot(explainer.expected_value[1], shap_values[1][12,:], X_test.columns)
+    shap.decision_plot(explainer.expected_value[1], shap_values[1][12, :], X_test.columns)
 
 
-    
 ## Task 3.3: Example-based Techniques
 def find_max_and_min_coverage(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier) -> tuple:
     """
@@ -718,10 +753,10 @@ def find_max_and_min_coverage(X: pd.DataFrame, y: pd.DataFrame, model: RandomFor
     - tuple: The index of the data instance with the highest and lowest coverage for the anchor rule.
 
     """
-    
+
     # return the values founded of the max and min coverage
-    return 3786,3243,3221,3848
-    
+    return 3786, 3243, 3221, 3848
+
     max_coverage = {0: float('-inf'), 1: float('-inf')}
     min_coverage = {0: float('inf'), 1: float('inf')}
     high_cov_idx = {0: 0, 1: 0}
@@ -779,6 +814,7 @@ def generate_anchor_rule(X, y, model, instance_index):
 
     # Generate the explanation
     return explainer.explain(instance[0], threshold=0.85)
+
 
 def evaluate_explanation(explanation, instance_index, target_value):
     """
