@@ -1,6 +1,4 @@
-from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.metrics import accuracy_score , mean_squared_error
 from sklearn.inspection import permutation_importance
 from sklearn.ensemble import RandomForestClassifier
 from lime.lime_tabular import LimeTabularExplainer
@@ -21,8 +19,8 @@ import seaborn as sns
 import pandas as pd
 import numpy as np
 import tqdm
-import yaml
 import shap
+import yaml
 
 
 def pre_process_df(df: pd.DataFrame, drop_correlated: bool) -> pd.DataFrame:
@@ -205,7 +203,6 @@ def visualize_data_with_pca(X: pd.DataFrame, y: pd.Series):
 
 
 # Classification Functions
-
 def split_data(X: pd.DataFrame, y: pd.DataFrame, test_size: float = 0.2, apply_smote: bool = False) -> tuple:
     """
     Splits the dataset into features and target variables, and further splits them into training and test sets.
@@ -508,7 +505,7 @@ def apply_rule_extraction_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomFor
 def plot_feature_importance_from_rules(feature_summary: pd.DataFrame):
     """
     Plots a bar chart of feature importance based on the frequency of feature occurrences in the extracted rules.
-    
+
     Parameters:
         feature_summary (pd.DataFrame): The DataFrame containing the feature frequencies from rule extraction.
 
@@ -555,8 +552,7 @@ def parse_condition(condition: str):
 
 
 ## Task 3.2: Feature-based Techniques
-def apply_permutation_importance_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame,
-                                     y_test: pd.DataFrame, model: RandomForestClassifier) -> None:
+def apply_permutation_importance_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier) -> None:
     """
     Explain a prediction using permutation importance.
 
@@ -568,9 +564,8 @@ def apply_permutation_importance_xai(X_train: pd.DataFrame, X_test: pd.DataFrame
     Returns:
     A bar chart visualizing the Permutation Importance of each feature.
     """
-    # Permutation Importance
     # Split data into training and test sets
-    # X_train, X_test, y_train, y_test = split_data(X, y)
+    X_train, X_test, y_train, y_test = split_data(X, y)
 
     # Train the model
     model.fit(X_train, y_train)
@@ -591,7 +586,7 @@ def apply_permutation_importance_xai(X_train: pd.DataFrame, X_test: pd.DataFrame
     plt.show()
 
 
-def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Series, y_test: pd.Series, model,
+def apply_lime_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier,
                    sample_index: int = 0) -> None:
     """
     Explain a prediction using LIME and display the explanation.
@@ -607,6 +602,8 @@ def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Seri
     Returns:
     - None: Displays the LIME explanation.
     """
+    # Split data into training and test sets
+    X_train, X_test, y_train, y_test = split_data(X, y)
 
     # Train the model
     model.fit(X_train, y_train)
@@ -645,7 +642,7 @@ def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Seri
     explanation = explainer.explain_instance(
         sample,
         predict_proba_fn_adjusted,
-        num_features=X_train.shape[1],
+        num_features=X_train.shape[1]
     )
 
     # Display the explanation
@@ -665,11 +662,10 @@ def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Seri
     # Compute fidelity score (MSE)
     fidelity_score = mean_squared_error([original_model_prediction], [surrogate_prediction])
 
-    print(f"Local fidelity (MSE) of the LIME explanation for sample {sample_index}: {fidelity_score:.4f}")
+    print(f"Local fidelity Error (MSE) of the LIME explanation for sample {sample_index}: {fidelity_score:.4f}")
 
 
-def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame,
-                   model: RandomForestClassifier, subset_sizes: int = [10, 50, 100]) -> None:
+def apply_shap_xai(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier, subset_sizes: int = [10, 50, 100]) -> None:
     """
     Explain a prediction using SHAP with a subset of the data for faster computation.
 
@@ -685,6 +681,8 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
     Returns:
     - SHAP explanation visualization in the notebook.
     """
+    # Split data into training and test sets
+    X_train, X_test, y_train, y_test = split_data(X, y)
 
     # Train the model
     model.fit(X_train, y_train)
@@ -702,9 +700,9 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
         shap_values_class_1 = shap_values[1]
 
         base_value_0 = explainer.expected_value[0]  # Base value for class 0
-        print("Base value for classe 0", base_value_0)
+        # print("Base value for classe 0", base_value_0)
         base_value_1 = explainer.expected_value[1]  # Base value for class 1
-        print("Base value for classe 1", base_value_1)
+        # print("Base value for classe 1", base_value_1)
 
     # SHAP bar plot (average absolute SHAP value per feature)
     plt.figure(figsize=(10, 6))
@@ -717,26 +715,24 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
     # Summary plot para a classe 1
     plt.title("Summary plot for class 1 - Satisfied")
     shap.summary_plot(shap_values_class_1, subset)
-    # SHAP decision plot for class 1
-    # shap.decision_plot(explainer.expected_value[1], shap_values[1][12, :], X_test.columns)
 
 
 ## Task 3.3: Example-based Techniques
 def find_max_and_min_coverage(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier) -> tuple:
     """
     Calls the generate_anchor_rule and finds the data instance with the maximum and minimum coverage for an anchor rule.
-    
+
     Parameters:
     - X (pd.DataFrame): The feature dataset.
     - y (pd.Series): The target variable.
     - model (sklearn.base.BaseEstimator): The trained model.
-    
+
     Returns:
     - tuple: The index of the data instance with the highest and lowest coverage for the anchor rule.
 
     """
 
-    # return the values founded of the max and min coverage
+    # return the values found of the max and min coverage after running this function one time
     return 3786, 3243, 3221, 3848
 
     max_coverage = {0: float('-inf'), 1: float('-inf')}
