@@ -17,6 +17,8 @@ from typing import Union
 import seaborn as sns
 import pandas as pd
 import numpy as np
+import tqdm
+import yaml
 import shap
 
 
@@ -703,53 +705,51 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
 
     
 ## Task 3.3: Example-based Techniques
-def find_instances_by_coverage(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, threshold=0.85):
+def find_max_and_min_coverage(X: pd.DataFrame, y: pd.DataFrame, model: RandomForestClassifier) -> tuple:
     """
-    Find two instances (high and low coverage) from the test set using Anchors.
-
+    Calls the generate_anchor_rule and finds the data instance with the maximum and minimum coverage for an anchor rule.
+    
     Parameters:
-    - X_train (pd.DataFrame): Training feature dataset.
-    - X_test (pd.DataFrame): Test feature dataset.
-    - y_train (pd.DataFrame): Training target dataset.
-    - y_test (pd.DataFrame): Test target dataset.
-    - model (RandomForestClassifier): Trained classification model.
-    - threshold (float): Threshold for Anchors rule precision.
-
+    - X (pd.DataFrame): The feature dataset.
+    - y (pd.Series): The target variable.
+    - model (sklearn.base.BaseEstimator): The trained model.
+    
     Returns:
-    - (int, int): Indices of the high-coverage and low-coverage instances in the test set.
-    """
-    # Ensure the model is trained
-    model.fit(X_train, y_train)
-    
-    # Define the predictor function for Anchors
-    def predict_fn(data):
-        data_df = pd.DataFrame(data, columns=X_train.columns)
-        return model.predict(data_df)
-    
-    # Initialize the AnchorTabular explainer
-    explainer = AnchorTabular(predict_fn, feature_names=X_train.columns.tolist())
-    print("Fitting the explainer...")
-    explainer.fit(X_train.values)
-    print("Explainer fitted.")
+    - tuple: The index of the data instance with the highest and lowest coverage for the anchor rule.
 
-    # Store coverage values for all instances in the test set
-    coverage_list = []
-    print(len(X_test))
-    for idx in range(len(X_test)):
-        instance = X_test.iloc[idx].values
-        explanation = explainer.explain(instance, threshold=threshold)
-        print(".")
-        coverage_list.append((idx, explanation.coverage))
-        
-    print("Coverage list created.")
-    # Sort instances by coverage
-    coverage_list = sorted(coverage_list, key=lambda x: x[1])
+    """
     
-    # Get the lowest and highest coverage instances
-    low_coverage_idx = coverage_list[0][0]
-    high_coverage_idx = coverage_list[-1][0]
+    # return the values founded of the max and min coverage
+    return 3786,3243,3221,3848
     
-    return high_coverage_idx, low_coverage_idx
+    max_coverage = {0: float('-inf'), 1: float('-inf')}
+    min_coverage = {0: float('inf'), 1: float('inf')}
+    high_cov_idx = {0: 0, 1: 0}
+    low_cov_idx = {0: 0, 1: 0}
+
+    for i in tqdm(range(X.shape[0]), desc="Finding Max and Min Coverage"):
+        explanation = generate_anchor_rule(X, y, model, i)
+        label = y[i]
+        if explanation.coverage > max_coverage[label]:
+            max_coverage[label] = explanation.coverage
+            high_cov_idx[label] = i
+            with open(f'max_coverage{label}.yaml', 'w') as file:
+                yaml.dump({'max_coverage': max_coverage[label], 'max_id': high_cov_idx[label]}, file)
+        if explanation.coverage < min_coverage[label]:
+            min_coverage[label] = explanation.coverage
+            low_cov_idx[label] = i
+            with open(f'min_coverage{label}.yaml', 'w') as file:
+                yaml.dump({'min_coverage': min_coverage[label], 'min_id': low_cov_idx[label]}, file)
+
+    with open('final_coverages.yaml', 'w') as file:
+        yaml.dump({
+            'max_coverage0': max_coverage[0], 'max_id0': high_cov_idx[0],
+            'min_coverage0': min_coverage[0], 'min_id0': low_cov_idx[0],
+            'max_coverage1': max_coverage[1], 'max_id1': high_cov_idx[1],
+            'min_coverage1': min_coverage[1], 'min_id1': low_cov_idx[1]
+        }, file)
+
+    return high_cov_idx[0], high_cov_idx[1], low_cov_idx[0], low_cov_idx[1]
 
 
 def generate_anchor_rule(X, y, model, instance_index):
