@@ -1,5 +1,5 @@
 # XAI
-Assignment for Advanced Topics on Machine Learning Class, 1º Year,1º Semester, Masters in Artificial Intelligence
+Assignment for Advanced Topics on Machine Learning Class, 1º Year,1º Semester, Masters in Artificial Intelligence 
 
 # Summary
 
