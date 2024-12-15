@@ -1,10 +1,10 @@
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.metrics import accuracy_score , mean_squared_error
 from sklearn.inspection import permutation_importance
 from sklearn.ensemble import RandomForestClassifier
 from lime.lime_tabular import LimeTabularExplainer
 from sklearn.preprocessing import StandardScaler
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.metrics import accuracy_score
 from alibi.explainers import AnchorTabular
 from imblearn.over_sampling import SMOTE
 from sklearn.decomposition import PCA
@@ -590,7 +590,6 @@ def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
                                      feature_names=X_train.columns.tolist(),
                                      class_names=y_train.unique().astype(str).tolist(),
                                      mode='classification')
-
     # Select the sample to explain
     sample = X_test.iloc[sample_index].values
 
@@ -600,13 +599,34 @@ def apply_lime_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
         return model.predict_proba(data_df)
 
     # Generate explanation
-    explanation = explainer.explain_instance(sample, predict_proba_fn, num_features=X_train.shape[1])
+    explanation = explainer.explain_instance(sample, predict_proba_fn, num_features=X_train.shape[1], labels=[0, 1])
 
     # Visualize feature contributions with Matplotlib
-    fig = explanation.as_pyplot_figure()
-    plt.title(f"Feature Contributions for Sample {sample_index}")
-    plt.tight_layout()
-    plt.show()
+    explanation.show_in_notebook()
+    # explanation.as_pyplot_figure()
+    # plt.title(f"Feature Contributions for Sample {sample_index}")
+    # plt.tight_layout()
+    # plt.show()
+
+    # Evaluate fidelity of LIME explanation using local fidelity (MSE)
+    # Generate predictions from the surrogate model for the test instance
+    surrogate_weights = explanation.local_exp[1]  # Extract surrogate model weights for the positive class
+    
+    print("Intercepts ",explanation.intercept)
+    surrogate_features = dict(surrogate_weights)
+    # Compute the surrogate prediction manually
+    surrogate_prediction = explanation.intercept[1] + sum(
+        surrogate_features.get(i, 0) * sample[i] for i in range(len(sample))
+    )
+
+    # Get the original model's prediction for the test instance
+    original_model_prediction = predict_proba_fn([sample])[0][1]
+
+    # Compute MSE as fidelity score
+    fidelity_score = mean_squared_error([original_model_prediction], [surrogate_prediction])
+
+    print(f"Local fidelity (MSE) of the LIME explanation for sample {sample_index}: {fidelity_score:.4f}")
+
 
 
 def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.DataFrame, y_test: pd.DataFrame, model: RandomForestClassifier, subset_sizes: int = [10, 50, 100]) -> None:
@@ -644,48 +664,6 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
         shap_values_class_0 = shap_values[0]  # Valores SHAP para a classe 0
         shap_values_class_1 = shap_values[1]
 
-
-        base_value_0 = explainer.expected_value[0]  # Base value for class 0
-        print("Base value for classe 0", base_value_0)
-        base_value_1 = explainer.expected_value[1]  # Base value for class 1
-        print("Base value for classe 1", base_value_1)
-
-        # Compute model predictions for the subset
-        predictions = model.predict_proba(subset)  # Probabilities for both classes (0 and 1)
-        #print(predictions[:10])  # Para ver as primeiras previsões
-        predictions_class_0 = predictions[:, 0]  # Probability for class 0
-        #print(predictions_class_0)
-        predictions_class_1 = predictions[:, 1]  # Probability for class 1
-        #print(predictions_class_1)
-        
-        # Fidelity metric for class 0:
-        shap_sums_class_0 = np.sum(shap_values_class_0, axis=1) + base_value_0
-        fidelity_error_class_0 = np.abs(shap_sums_class_0 - predictions_class_0)
-        fidelity_score_class_0 = np.mean(fidelity_error_class_0)
-
-        # Fidelity metric for class 1:
-        shap_sums_class_1 = np.sum(shap_values_class_1, axis=1) + base_value_1
-        fidelity_error_class_1 = np.abs(shap_sums_class_1 - predictions_class_1)
-        fidelity_score_class_1 = np.mean(fidelity_error_class_1)
-
-        # Combine fidelity scores for both classes into a global fidelity score
-        global_fidelity_score = (fidelity_score_class_0 + fidelity_score_class_1) / 2
-
-        # Append the global fidelity score to the list
-        fidelity_scores.append(global_fidelity_score)
-
-        print(f"Subset size: {subset_size}, Fidelity Score (Class 0): {fidelity_score_class_0:.4f}, Fidelity Score (Class 1): {fidelity_score_class_1:.4f}, Global Fidelity Score: {global_fidelity_score:.4f}")
-
-    # Plot the fidelity scores for different subset sizes
-    plt.figure(figsize=(10, 6))
-    plt.plot(subset_sizes, fidelity_scores, marker='o', linestyle='-', color='b')
-    plt.title("Fidelity Score vs. Subset Size")
-    plt.xlabel("Subset Size")
-    plt.ylabel("Mean Fidelity Error (MAE)")  # Fidelity score (global)
-    plt.grid(True)
-    plt.tight_layout()
-    plt.show()
-
     # SHAP bar plot (average absolute SHAP value per feature)
     plt.figure(figsize=(10, 6))
     plt.title("SHAP Bar Plot (Feature Importance)")
@@ -697,8 +675,7 @@ def apply_shap_xai(X_train: pd.DataFrame, X_test: pd.DataFrame, y_train: pd.Data
     # Summary plot para a classe 1
     plt.title("Summary plot for class 1 - Satisfied")
     shap.summary_plot(shap_values_class_1, subset)
-    # SHAP decision plot for class 1
-    shap.decision_plot(explainer.expected_value[1], shap_values[1][12,:], X_test.columns)
+
 
 
     
